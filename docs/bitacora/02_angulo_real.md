@@ -2,13 +2,15 @@
 
 | | |
 |---|---|
-| Fecha | ____ |
-| Servo | Canal 0 (FL abducción), sacado de la pata y sujeto por el cuerpo |
-| Fuente | ____ V |
+| Fecha | 2 de noviembre de 2026 |
+| Servos | Los 12 (canales 0–11), uno a la vez con el transportador |
+| Fuente | ____ V (anotar) |
 | Firmware | `firmware/esp32_principal` (límite de 2360 µs) |
-| Script | `pc/angulo_real.py` |
+| Método | A mano con el Monitor Serie: una lectura subiendo en 500, 1500 y 2360 µs por servo |
+| Script | `pc/angulo_real.py` (para repetirla con 5 puntos, subiendo y bajando) |
 | Herramienta | [`impresiones/transportador_servo/`](../../impresiones/transportador_servo/): disco sobre el horn + indicador fijo |
-| Datos | `datos/AAAA-MM-DD_angulo_real/` (llenar) |
+| Datos | [`datos/2026-11-02_angulo_real/`](../../datos/2026-11-02_angulo_real/): `giro_real.csv` y `escala.json` |
+| Resultado | El eje gira **4.3 % más** que la convención: **10.65 µs por grado real**, no 11.11 |
 
 ## Por qué
 
@@ -87,13 +89,61 @@ Si la convención es buena, el giro real queda dentro de ±1° del ángulo pedid
 transportador tiene ~±0.5° de incertidumbre, por las marcas de 2°.
 
 Si el giro real sale proporcionalmente distinto (por ejemplo, 92° en lugar de 90°), la escala
-del servo no es 11.11 µs por grado. En ese caso se corrige el factor en el firmware y en
-`pc/eficiencia_servos.py`, y se vuelve a calibrar.
+del servo no es 11.11 µs por grado.
 
 ## Resultados
 
-(llenar)
+Giro real medido con el transportador (una lectura subiendo; la marca en 500 µs es el 0):
+
+| Servo | 500 µs (0°) | 1500 µs (90°) | 2360 µs (167.4°) | Factor |
+|---|---|---|---|---|
+| 0 · FL abducción | 0 | 92 | 176 | 1.045 |
+| 1 · FL cadera | 0 | 92 | 172 | 1.026 |
+| 2 · FL rodilla | 0 | 93 | 176 | 1.047 |
+| 3 · FR abducción | 0 | 94 | 175 | 1.045 |
+| 4 · FR cadera | 0 | 95 | 176 | 1.052 |
+| 5 · FR rodilla | 0 | 94 | 175 | 1.045 |
+| 6 · RL abducción | 0 | 98 | 178 | 1.069 |
+| 7 · RL cadera | 0 | 92 | 174 | 1.036 |
+| 8 · RL rodilla | 0 | 94 | 176 | 1.050 |
+| 9 · RR abducción | 0 | 92 | 173 | 1.031 |
+| 10 · RR cadera | 0 | 93 | 175 | 1.043 |
+| 11 · RR rodilla | 0 | 92 | 173 | 1.031 |
+| **Promedio** | 0 | **93.4** | **174.9** | **1.043** |
+
+**Factor** = giro real / ángulo de la convención, ajustado por mínimos cuadrados con los dos
+puntos de cada servo (recta que pasa por el 0):
+factor = (90 · g₁₅₀₀ + 167.4 · g₂₃₆₀) / (90² + 167.4²).
+
+- **Factor de los 12:** 1.043 (desviación de 0.012 entre servos; error estándar del promedio,
+  0.003).
+- **Escala real:** 11.11 / 1.043 = **10.65 µs por grado real**, o 0.0939 °/µs.
+- **El límite de 2360 µs** es 167.4° de la convención y **174.6° reales**.
+- **El giro es lineal:** con el promedio de 2360 µs, una recta predice 94.0° en 1500 µs y se
+  midieron 93.4°.
+- **Dispersión entre servos:** ±2–3° a la mitad del recorrido (de 92° a 98°). Con una sola
+  lectura a ojo y marcas de 2°, no alcanza para decir que un servo es distinto de otro. En la
+  prueba 01 los 12 tenían la misma forma, recta dentro de 0.5°.
 
 ## Conclusiones
 
-(llenar)
+- La convención de 11.11 µs/° no es la de estos servos: con el mismo pulso, el eje gira 4.3 % más.
+  En el extremo son ~7°, que para la cinemática sí importan.
+- **Se usa un solo factor para los 12 (1.043).** Con esta medición no se distinguen
+  diferencias reales entre servos, y un factor por servo metería el error de lectura en cada
+  articulación.
+- **Decisión (opción B): el firmware no se cambia.** Sigue hablando en µs y con su límite duro de
+  2360 µs, que se encontró midiendo en esas mismas unidades y sigue siendo válido. El factor se
+  aplica solo en la compu, en un solo lugar: `pc/escala.py`, que lo lee de
+  `datos/2026-11-02_angulo_real/escala.json`.
+- **La prueba 01 sigue valiendo.** La relación mV contra pulso está bien medida; sus "grados"
+  son de la convención. `pc/escala.py` los pasa a grados reales con el factor.
+- Causa probable: el oscilador del PCA9685 (el firmware supone 27 MHz). Si corre a ~25.9 MHz,
+  todos los pulsos salen 4.3 % más largos, y por eso los 12 se desvían casi igual. No se midió;
+  con la opción B no hace falta. **Si se cambia la placa PCA9685, hay que repetir esta prueba.**
+
+## Pendiente
+
+- [ ] Anotar el voltaje de la fuente en la tabla de arriba.
+- [ ] (Opcional) Repetir con `pc/angulo_real.py` en uno o dos servos, con 5 puntos subiendo y
+      bajando, para medir la histéresis del eje y confirmar el factor.

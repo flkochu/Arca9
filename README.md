@@ -13,9 +13,10 @@ Este repositorio empieza de cero el 29 de octubre de 2026, con la prueba de efic
 |---|---|
 | Hecho | Dos ESP32 leen el cable de retroalimentación de los 12 servos |
 | Hecho | Prueba 01: eficiencia de los 12 servos. Error de 0.19–0.25° con la tabla de búsqueda; tope en 168° |
-| Listo para probar | Prueba 02: ángulo real del eje con el transportador impreso (`impresiones/transportador_servo/`) |
-| Sigue | Mejorar la tierra de la ESP32 auxiliar |
-| Sigue | Rampas (velocidad contra error) y marcha en el aire con una pata |
+| Hecho | Prueba 02: ángulo real con el transportador. El eje gira 4.3 % más que la convención: 10.65 µs por grado real (`pc/escala.py`) |
+| Pospuesta | Prueba 03: ruido de la ESP32 auxiliar (`pc/ruido.py` está listo) |
+| Hecho | Prueba 04: rampas. Atraso de ~100 ms a todas las velocidades; sin saturación hasta 240 °/s (`pc/rampas.py`, comando `G`) |
+| Sigue | Marcha en el aire con una pata |
 
 ## Hardware
 
@@ -36,6 +37,10 @@ firmware/esp32_principal/   PCA9685, cables verdes de FL y enlace con la auxilia
 firmware/esp32_aux/         cables verdes de FR, RL y RR
 pc/eficiencia_servos.py     prueba 01, eficiencia: mide, calcula y grafica
 pc/angulo_real.py           prueba 02, ángulo real con el transportador impreso
+pc/ruido.py                 prueba 03, ruido de los cables verdes con el servo quieto
+pc/rampas.py                prueba 04, rampas: velocidad contra error (comando G)
+pc/escala.py                µs <-> grados reales y mV -> grados reales (lo usan los scripts nuevos)
+pc/arca9_serial.py          comandos de la ESP32 principal (P, R, V, D, ?) para los scripts nuevos
 pruebas/arnes_firmware/     corre los dos firmwares en la compu para probarlos sin las placas
 impresiones/                piezas para imprimir, cada una con su generador y sus STL
 datos/                      corridas reales, una carpeta por prueba
@@ -68,7 +73,9 @@ Para practicar sin el hardware: `python pc/eficiencia_servos.py --simulado`.
 | # | Prueba | Fecha | Resultado |
 |---|---|---|---|
 | [01](docs/bitacora/01_eficiencia_servos.md) | Eficiencia de los 12 servos con retroalimentación | 29 oct 2026 | 0.19–0.25° RMS con la tabla; histéresis de 0.2° en promedio; tope en 168° |
-| [02](docs/bitacora/02_angulo_real.md) | Ángulo real del eje, con transportador | pendiente | — |
+| [02](docs/bitacora/02_angulo_real.md) | Ángulo real del eje, con transportador | 2 nov 2026 | El eje gira 1.043 × la convención: 10.65 µs por grado real |
+| [03](docs/bitacora/03_ruido_auxiliar.md) | Ruido de la ESP32 auxiliar, antes y después de su tierra | pospuesta | — |
+| [04](docs/bitacora/04_rampas.md) | Rampas: velocidad contra error, los 12 servos | 2 nov 2026 | Atraso de ~100 ms a todas las velocidades; error = velocidad × 0.1 s; sin saturación hasta 240 °/s |
 
 ## Créditos
 

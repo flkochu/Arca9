@@ -1,0 +1,30 @@
+{
+  "prueba": "02_angulo_real",
+  "fecha": "2026-11-02",
+  "metodo": "a mano con el Monitor Serie y el transportador impreso; 12 servos; una lectura subiendo en 500, 1500 y 2360 us",
+  "convencion": "500 us = 0 grados, 11.11 us por grado",
+  "factor_real": 1.0433,
+  "factor_real_error_estandar": 0.0033,
+  "factor_real_desviacion": 0.0116,
+  "us_por_grado_real": 10.649,
+  "grados_reales_por_us": 0.0939,
+  "limite_us": 2360,
+  "limite_grados_reales": 174.7,
+  "giro_medio_1500us": 93.42,
+  "giro_medio_2360us": 174.92,
+  "nota": "giro real = factor_real x angulo de la convencion. Un solo factor para los 12 servos (promedio): con una sola lectura a ojo por punto no se distinguen diferencias entre servos.",
+  "factor_por_servo_solo_referencia": {
+    "0": 1.0448,
+    "1": 1.0263,
+    "2": 1.0473,
+    "3": 1.0452,
+    "4": 1.0523,
+    "5": 1.0452,
+    "6": 1.0691,
+    "7": 1.0356,
+    "8": 1.0498,
+    "9": 1.0309,
+    "10": 1.0427,
+    "11": 1.0309
+  }
+}

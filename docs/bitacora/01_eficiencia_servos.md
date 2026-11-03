@@ -125,9 +125,10 @@ En resumen:
 
 ## Pendiente
 
-- [ ] Comprobar con transportador, en un servo, que 0°, 90° y 167.4° pedidos son esos grados
-      reales: [prueba 02](02_angulo_real.md).
-- [ ] Mejorar la tierra de la ESP32 auxiliar (cable corto y grueso a la GND de la fuente) y volver
-      a medir el ruido con `--revisar`.
-- [ ] Prueba de rampas: velocidad contra error.
+- [x] Comprobar con transportador el ángulo real: [prueba 02](02_angulo_real.md). El eje gira
+      1.043 veces el ángulo de la convención; los grados de esta prueba son de la convención
+      (`pc/escala.py` los pasa a grados reales).
+- [ ] Mejorar la tierra de la ESP32 auxiliar y volver a medir el ruido: [prueba 03](03_ruido_auxiliar.md)
+      (pospuesta el 2 nov 2026).
+- [ ] Prueba de rampas, velocidad contra error: [prueba 04](04_rampas.md).
 - [ ] Marcha en el aire con una pata, con video.

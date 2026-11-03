@@ -6,3 +6,4 @@ script, sin editarlas. La nota de cada una está en `docs/bitacora/`.
 | Carpeta | Prueba |
 |---|---|
 | `2026-10-29_eficiencia_12_servos/` | [01 · Eficiencia de los 12 servos](../docs/bitacora/01_eficiencia_servos.md) |
+| `2026-11-02_angulo_real/` | [02 · Ángulo real, con transportador](../docs/bitacora/02_angulo_real.md). Medida a mano; `escala.json` lo lee `pc/escala.py` |
