@@ -31,8 +31,9 @@ CUIDADO: pensado para servos al aire, sin piezas. Con las patas armadas hay que 
 --desde y --hasta para que no choquen. Al terminar (o con Ctrl+C) se sueltan los 12 servos.
 
 Qué se calcula en cada rampa (ida y vuelta por separado, y el promedio de las 3 vueltas):
-  - Error en la rampa: ángulo pedido − ángulo medido en el 60 % central de la rampa, en el
-    sentido del movimiento (positivo = el servo va atrás).
+  - Error en la rampa: ángulo pedido − ángulo medido en la segunda mitad de la rampa (el servo
+    tarda ~0.1 s en arrancar; ahí ya va a velocidad constante), en el sentido del movimiento
+    (positivo = el servo va atrás).
   - Atraso: ese error entre la velocidad pedida (ms).
   - Velocidad real: pendiente del ángulo medido en ese mismo tramo.
   - Error máximo: el mayor |pedido − medido| en toda la rampa y su espera.
@@ -76,7 +77,7 @@ ESPERA_MS = 500
 PAUSA_S = 1.0                          # quieto en el inicio antes de cada rampa
 VEL_ACERCAR = 60.0                     # °/s para llevar un servo al inicio
 BANDA = 1.0                            # ° para el asentamiento
-TRAMO = (0.2, 0.8)                     # parte central de cada rampa que se usa
+TRAMO = (0.5, 1.0)                     # segunda mitad de cada rampa: el servo ya va a velocidad constante
 
 PATAS = ["FL", "FR", "RL", "RR"]
 ART = ["abducción", "cadera", "rodilla"]

@@ -86,11 +86,21 @@ verde ──[100 kΩ]──┬── GPIO
 
 - **Pulso:** de 500 a 2360 µs en todos los canales (`US_MAX_CH`). Los 12 servos llegan a su
   tope en ~2367 µs (168°), según la [prueba 01](bitacora/01_eficiencia_servos.md).
-- **Convención de ángulo:** 500 µs = 0°, 1500 µs = 90°, 2500 µs = 180°, o sea 11.11 µs por grado.
+- **Convención de ángulo (pruebas 01 y 02):** 500 µs = 0°, 1500 µs = 90°, 2500 µs = 180°, o sea
+  11.11 µs por grado.
+- **Grados reales:** según la [prueba 02](bitacora/02_angulo_real.md), el eje gira 1.043 veces el
+  ángulo de la convención: **10.65 µs por grado real**. El límite de 2360 µs son 174.6° reales.
+  El firmware no cambia (sigue en µs); la cuenta se hace solo en `pc/escala.py`, que lee el factor
+  de `datos/2026-11-02_angulo_real/escala.json`. Si se cambia el PCA9685, hay que repetir la
+  prueba 02.
 
-## Protocolo de la ESP32 principal
+## Protocolo de la ESP32 principal (versión 2)
 
 USB a 115200 baud, una línea por comando. Sirven "New Line" y "Both NL & CR".
+
+**Versiones.** v1 (29 oct 2026): `P`, `R`, `D`, `V` y `?`. **v2 (2 nov 2026): agrega `G`**, y `?`
+dice `PROTO=2`. Lo de v1 no cambió, así que los scripts viejos siguen funcionando. Un script que
+necesita `G` revisa primero que `?` diga `PROTO=2`.
 
 | Comando | Respuesta |
 |---|---|
@@ -98,7 +108,36 @@ USB a 115200 baud, una línea por comando. Sirven "New Line" y "Both NL & CR".
 | `R canal n` | `R canal n media_mV sigma_mV min_mV max_mV`: n lecturas, 0.5 ms entre ellas |
 | `D` | `OK D`: suelta todos los servos |
 | `V` | `V mv0 … mv11`: una lectura de los 12 (-1 = sin lectura) |
-| `?` | `OK1-RETRO listo PCA=ok FB=12 AUX=ok DESC=0` |
+| `?` | `OK1-RETRO listo PCA=ok FB=12 AUX=ok DESC=0 PROTO=2` |
+| `G canal us_a us_b vel vueltas espera_ms` | Rampa de un servo hecha por la ESP32 (v2). Ver abajo |
+
+### `G`: rampa de un servo (v2)
+
+La ESP32 hace la rampa ella sola. Espera `espera_ms` en `us_a`, va a `us_b` a `vel` µs/s, espera,
+regresa a `us_a` y espera; eso `vueltas` veces.
+
+- **Pulso:** se actualiza cada 20 ms (el servo no ve cambios más rápidos) y siempre pasa por el
+  límite de 2360 µs.
+- **Cable verde:** se graba cada ~2 ms. En FL es la mediana de 5 lecturas de la principal; en FR,
+  RL y RR, cada línea `A` de la auxiliar, con la hora en que llegó (~0.6 ms después de medirse).
+- **Límites:** canal 0–11; `us_a` ≠ `us_b`, los dos entre 500 y 2360; `vel` de 50 a 4000 µs/s;
+  `vueltas` de 1 a 10; `espera_ms` de 0 a 5000; en total, hasta ~17.6 s (9000 muestras).
+- **Sin saltos:** antes hay que mandar `P canal us_a`. Si el canal está en otro pulso, contesta
+  `E G: primero manda P …`.
+- **Para detenerla:** cualquier cosa que llegue por USB la detiene. El servo se queda con el último
+  pulso, contesta `E G: detenida …`, no manda datos y luego atiende lo que llegó (por ejemplo, `D`).
+
+Respuesta:
+
+```
+OK G canal us_a us_b vel vueltas espera_ms total_ms     al empezar
+G DATOS canal n_muestras n_comandos                     al terminar
+M t mv            (n_muestras líneas; t en décimas de ms desde el inicio)
+C t us            (n_comandos líneas; cada pulso aplicado)
+G FIN canal
+```
+
+A 115200 baud los datos tardan ~0.55 s por cada segundo de rampa (~10 s para una de 15.5 s).
 
 Entre las ESP32 (921600 baud), la auxiliar manda `A v0 … v8 c` cada 2 ms, con
 c = (v0 + … + v8) % 1000, y contesta `R k n` con `R k n media sigma min max`.

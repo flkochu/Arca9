@@ -95,7 +95,12 @@ int main(int argc, char **argv) {
     struct termios t; tcgetattr(m, &t); cfmakeraw(&t); tcsetattr(m, TCSANOW, &t);
     fcntl(m, F_SETFL, O_NONBLOCK);
     printf("%s\n", ptsname(m)); fflush(stdout);
-    principal::Serial.sink = [m](const char *s, size_t n) { ssize_t r = write(m, s, n); (void)r; };
+    principal::Serial.sink = [m](const char *s, size_t n) {   // como el USB real: espera, no tira bytes
+      while (n > 0) {
+        ssize_t r = write(m, s, n);
+        if (r > 0) { s += r; n -= (size_t)r; } else usleep(200);
+      }
+    };
     char b[256];
     for (;;) {
       ssize_t n = read(m, b, sizeof b);
@@ -169,6 +174,82 @@ int main(int argc, char **argv) {
   revisa(r == "OK D\n" && sueltos, "D suelta los 16 canales", sin_nl(r));
   r = correr("P 3 1500\r");
   revisa(r == "OK P 3 1500\n", "acepta CR+LF (Both NL & CR)", sin_nl(r));
+
+  // ---------------------------------------------------------------- protocolo v2: rampas (G)
+  r = correr("?");
+  revisa(r.find("PROTO=2") != std::string::npos, "? dice PROTO=2", sin_nl(r));
+  r = correr("G 0 819 2097 2556 1 200");
+  revisa(r.rfind("E G: primero manda P 0 819", 0) == 0, "G sin P previo no da saltos", sin_nl(r));
+  correr("P 0 819");
+  r = correr("G 0 819 2400 2556 1 200");
+  revisa(r.rfind("E G: us_a y us_b", 0) == 0, "G no acepta pulsos arriba de 2360", sin_nl(r));
+  r = correr("G 0 819 2097 50 10 5000");
+  revisa(r.rfind("E G: muy larga", 0) == 0, "G muy larga da error", sin_nl(r));
+  r = correr("G 0 819 2097 9000 1 200");
+  revisa(r.rfind("E G: vel", 0) == 0, "G con velocidad fuera de rango", sin_nl(r));
+
+  struct Rampa { int ok = 0, ch = -1, nM = -1, nC = -1, lm = 0, lc = 0, fin = 0, usMin = 99999, usMax = 0,
+                 mvMin = 99999, tMax = 0; std::string error; };
+  auto leer_rampa = [](const std::string &s) {
+    Rampa R;
+    size_t i = 0;
+    while (i < s.size()) {
+      size_t j = s.find('\n', i);
+      if (j == std::string::npos) j = s.size();
+      std::string l = s.substr(i, j - i);
+      i = j + 1;
+      int a, b, c;
+      if (l.rfind("OK G", 0) == 0) R.ok = 1;
+      else if (l.rfind("E ", 0) == 0) R.error = l;
+      else if (sscanf(l.c_str(), "G DATOS %d %d %d", &a, &b, &c) == 3) { R.ch = a; R.nM = b; R.nC = c; }
+      else if (sscanf(l.c_str(), "M %d %d", &a, &b) == 2) { R.lm++; R.mvMin = std::min(R.mvMin, b); R.tMax = std::max(R.tMax, a); }
+      else if (sscanf(l.c_str(), "C %d %d", &a, &b) == 2) { R.lc++; R.usMin = std::min(R.usMin, b); R.usMax = std::max(R.usMax, b); }
+      else if (l.rfind("G FIN", 0) == 0) R.fin = 1;
+    }
+    return R;
+  };
+  // FL: 0.2 s + (0.5 s ida + 0.2 s + 0.5 s vuelta + 0.2 s) = 1.6 s
+  r = correr("G 0 819 2097 2556 1 200");
+  { Rampa R = leer_rampa(r);
+    bool ok = R.ok && R.fin && R.ch == 0 && R.nM == R.lm && R.nC == R.lc && R.nM > 750 && R.nM < 830 &&
+              R.nC >= 79 && R.nC <= 81 && R.usMin == 819 && R.usMax == 2097 && g_pca_us[0] == 819 &&
+              abs(R.mvMin - (int)lround(0.6 * (3000 - 1.404 * 1597))) < 8 && R.tMax > 15800 && R.tMax <= 16000;
+    char d[200];
+    snprintf(d, sizeof d, "M=%d/%d C=%d/%d us %d-%d mvMin=%d tMax=%d (0.1 ms) %s", R.lm, R.nM, R.lc, R.nC,
+             R.usMin, R.usMax, R.mvMin, R.tMax, R.error.c_str());
+    revisa(ok, "G en FL (canal 0): datos completos y termina en us_a", d); }
+  // Auxiliar, 3 vueltas
+  correr("P 7 819");
+  r = correr("G 7 819 2097 2556 3 200");
+  { Rampa R = leer_rampa(r);
+    double total_ms = 200 + 3 * (2 * 500 + 2 * 200);           // 4.4 s
+    bool ok = R.ok && R.fin && R.ch == 7 && R.nM == R.lm && R.nC == R.lc && R.nM > total_ms / 2 * 0.9 &&
+              R.usMax == 2097 && R.usMin == 819 && g_pca_us[7] == 819;
+    char d[200];
+    snprintf(d, sizeof d, "M=%d C=%d us %d-%d %s", R.lm, R.lc, R.usMin, R.usMax, R.error.c_str());
+    revisa(ok, "G por la auxiliar (canal 7), 3 vueltas", d); }
+  r = correr("?");
+  revisa(r.find("AUX=ok") != std::string::npos, "la auxiliar sigue bien después de G", sin_nl(r));
+  // En el límite: nunca más de 2360
+  correr("P 4 1500");
+  r = correr("G 4 1500 2360 3000 1 100");
+  { Rampa R = leer_rampa(r);
+    revisa(R.fin && R.usMax == 2360, "G llega al límite y no pasa de 2360", "usMax=" + std::to_string(R.usMax)); }
+  correr("P 4 1500");
+  r = correr("G 4 1500 2360 3000 1 0");
+  { Rampa R = leer_rampa(r);
+    revisa(R.fin && R.usMax <= 2360 && R.usMax > 2300, "G sin espera tampoco pasa de 2360",
+           "usMax=" + std::to_string(R.usMax)); }
+  // Se detiene si llega algo por USB
+  correr("P 3 819");
+  salida.clear();
+  mandar("G 3 819 2097 639 1 200\nD\n");
+  for (int i = 0; i < 300; i++) { principal::loop(); g_us += 200; hook_otra(); }
+  revisa(salida.find("E G: detenida") != std::string::npos && salida.find("OK D") != std::string::npos &&
+         salida.find("G DATOS") == std::string::npos, "G se detiene si llega un comando y luego lo atiende",
+         sin_nl(salida.substr(0, 120)));
+  r = correr("G 3 819 2097 639 1 200");
+  revisa(r.rfind("E G: primero manda P", 0) == 0, "después de D, G vuelve a pedir P", sin_nl(r));
   printf("\n%s (%d fallas)\n", fallas ? "HAY FALLAS" : "TODO BIEN", fallas);
   return fallas ? 1 : 0;
 }

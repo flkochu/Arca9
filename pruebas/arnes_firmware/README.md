@@ -8,7 +8,9 @@ UART virtual. Luego revisa el protocolo:
 - que las lecturas de la auxiliar lleguen a la principal;
 - que se descarten las líneas dañadas;
 - que todo siga funcionando aunque se llene el buffer;
-- qué pasa si se desconecta la auxiliar y si se vuelve a conectar.
+- qué pasa si se desconecta la auxiliar y si se vuelve a conectar;
+- el comando `G` (protocolo v2): datos completos en FL y por la auxiliar, que no dé saltos, que
+  nunca pase de 2360 µs, los errores y que se detenga si llega un comando.
 
 ```
 g++ -std=c++17 -Istubs -o arnes arnes.cpp
