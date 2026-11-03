@@ -34,7 +34,8 @@ Las conexiones pin por pin están en [docs/hardware.md](docs/hardware.md).
 ```
 firmware/esp32_principal/   PCA9685, cables verdes de FL y enlace con la auxiliar; USB a la compu
 firmware/esp32_aux/         cables verdes de FR, RL y RR
-pc/eficiencia_servos.py     prueba de eficiencia: mide, calcula y grafica
+pc/eficiencia_servos.py     prueba 01, eficiencia: mide, calcula y grafica
+pc/angulo_real.py           prueba 02, ángulo real con el transportador impreso
 pruebas/arnes_firmware/     corre los dos firmwares en la compu para probarlos sin las placas
 impresiones/                piezas para imprimir, cada una con su generador y sus STL
 datos/                      corridas reales, una carpeta por prueba
