@@ -1,0 +1,40 @@
+{
+  "fecha": "20261103_194555",
+  "prueba": "05_marcha",
+  "pata": "FL",
+  "canales": [
+    0,
+    1,
+    2
+  ],
+  "periodos_s": [
+    2.0,
+    1.2,
+    0.8
+  ],
+  "x0_cm": 2.0,
+  "z0_cm": 18.5,
+  "largo_cm": 6.0,
+  "alto_cm": 3.0,
+  "apoyo": 0.6,
+  "pasos": 4,
+  "espera_s": 0.5,
+  "adelanto_ms": 100.0,
+  "dt_s": 0.02,
+  "voltaje": 5.99,
+  "simulado": false,
+  "esp32": {
+    "linea": "OK1-RETRO listo PCA=ok FB=12 AUX=ok DESC=0 PROTO=3 RESET=encendido SEG=35",
+    "pca": "ok",
+    "fb": 12,
+    "aux": "ok",
+    "desc": 0,
+    "proto": 3,
+    "reset": "encendido",
+    "seg": 35
+  },
+  "escala": "datos/2026-11-02_angulo_real/escala.json",
+  "calibracion": "datos/2026-10-29_eficiencia_12_servos/calibracion_servos.json",
+  "pata_json": "datos/2026-11-03_pata_fl/pata_fl.json",
+  "cancelado": false
+}

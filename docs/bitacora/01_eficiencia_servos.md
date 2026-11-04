@@ -131,4 +131,4 @@ En resumen:
 - [ ] Mejorar la tierra de la ESP32 auxiliar y volver a medir el ruido: [prueba 03](03_ruido_auxiliar.md)
       (pospuesta el 2 nov 2026).
 - [x] Prueba de rampas, velocidad contra error: [prueba 04](04_rampas.md).
-- [ ] Marcha en el aire con una pata, con video.
+- [x] Marcha en el aire con una pata: [prueba 05](05_marcha_aire.md) (falta el video).

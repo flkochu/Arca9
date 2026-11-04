@@ -177,7 +177,8 @@ int main(int argc, char **argv) {
 
   // ---------------------------------------------------------------- protocolo v2: rampas (G)
   r = correr("?");
-  revisa(r.find("PROTO=2") != std::string::npos, "? dice PROTO=2", sin_nl(r));
+  { size_t q = r.find("PROTO="); int v = q == std::string::npos ? 0 : atoi(r.c_str() + q + 6);
+    revisa(v >= 2, "? dice PROTO=2 o mayor (G)", sin_nl(r)); }
   r = correr("G 0 819 2097 2556 1 200");
   revisa(r.rfind("E G: primero manda P 0 819", 0) == 0, "G sin P previo no da saltos", sin_nl(r));
   correr("P 0 819");
@@ -250,6 +251,113 @@ int main(int argc, char **argv) {
          sin_nl(salida.substr(0, 120)));
   r = correr("G 3 819 2097 639 1 200");
   revisa(r.rfind("E G: primero manda P", 0) == 0, "después de D, G vuelve a pedir P", sin_nl(r));
+
+  // ---------------------------------------------------------------- protocolo v3: S y T
+  r = correr("?");
+  revisa(r.find("PROTO=3") != std::string::npos, "? dice PROTO=3", sin_nl(r));
+  revisa(r.find("RESET=encendido SEG=") != std::string::npos, "? dice por qué arrancó (RESET) y cuánto lleva (SEG)", sin_nl(r));
+  auto numeros = [](const std::string &s, size_t desde) {
+    std::vector<long> v; const char *p = s.c_str() + desde; char *fin;
+    for (;;) { long x = strtol(p, &fin, 10); if (fin == p) break; v.push_back(x); p = fin; }
+    return v;
+  };
+  r = correr("S 1000 1100 1200 1300 1400 1500 1600 1700 1800 1900 2000 2500");
+  { auto v = numeros(r, 1);
+    bool ok = r.rfind("S ", 0) == 0 && v.size() == 12 && g_pca_us[0] == 1000 && g_pca_us[10] == 2000 &&
+              g_pca_us[11] == 2360 && abs(v[0] - (int)lround(0.6 * (3000 - 1.404 * 500))) < 8;
+    revisa(ok, "S mueve los 12 a la vez, recorta a 2360 y regresa 12 lecturas", sin_nl(r)); }
+  r = correr("S -1 -1 0 -1 -1 -1 -1 -1 -1 -1 -1 1500");
+  revisa(r.rfind("S ", 0) == 0 && g_pca_us[0] == 1000 && g_pca_suelto[2] && g_pca_us[11] == 1500,
+         "S: -1 no cambia y 0 suelta ese canal", sin_nl(r));
+  r = correr("S 1500 1500 1500");
+  revisa(r.rfind("E S:", 0) == 0, "S con menos de 12 pulsos da error", sin_nl(r));
+
+  // T: canales 0, 1 y 2, 100 puntos (2 s)
+  correr("P 0 1000"); correr("P 1 1200"); correr("P 2 1400");
+  r = correr("T INICIO 7 100");
+  revisa(r == "OK T INICIO 7 3 100\n", "T INICIO con máscara 7", sin_nl(r));
+  salida.clear();
+  for (int i = 0; i < 100; i++) {
+    char l[64];
+    snprintf(l, sizeof l, "K %d %d %d\n", 1000 + 5 * i, 1200 - 3 * i, 1400);
+    mandar(l);
+    for (int k = 0; k < 4; k++) { principal::loop(); g_us += 200; hook_otra(); }
+  }
+  revisa(salida == "OK K 32\nOK K 64\nOK K 96\nOK K 100\n", "K: confirma cada 32 puntos y el último", sin_nl(salida));
+  r = correr("T CORRER");
+  { size_t a = r.find("T DATOS");
+    bool ok = r.rfind("OK T CORRER 3 100 2000", 0) == 0 && a != std::string::npos && r.find("T FIN") != std::string::npos;
+    int nc = 0, nf = 0, np = 0, filasBien = 0, cBien = 0;
+    if (ok) sscanf(r.c_str() + a, "T DATOS %d %d %d", &nc, &nf, &np);
+    size_t i = 0;
+    while (i < r.size()) {
+      size_t j = r.find('\n', i); if (j == std::string::npos) j = r.size();
+      std::string l = r.substr(i, j - i); i = j + 1;
+      if (l.rfind("M ", 0) == 0 && numeros(l, 1).size() == 4) filasBien++;
+      if (l.rfind("C ", 0) == 0 && numeros(l, 1).size() == 4) cBien++;
+    }
+    ok = ok && nc == 3 && np == 100 && nf > 950 && nf < 1010 && filasBien == nf && cBien == 100 &&
+         g_pca_us[0] == 1495 && g_pca_us[1] == 903 && g_pca_us[2] == 1400;
+    char d[160]; snprintf(d, sizeof d, "canales=%d filas=%d/%d puntos=%d/%d final=%d %d %d", nc, filasBien, nf, cBien, np,
+                          g_pca_us[0], g_pca_us[1], g_pca_us[2]);
+    revisa(ok, "T CORRER: 3 servos a la vez, datos completos, termina en el último punto", d); }
+  r = correr("T CORRER");
+  revisa(r.rfind("E T: primero manda P 0 1000", 0) == 0, "T no da saltos (el servo ya no está en el primer punto)", sin_nl(r));
+  r = correr("T INICIO 7 5");
+  correr("K 1000 1200 1400");
+  r = correr("K 1000 2400 1400");
+  revisa(r.rfind("E K: punto 1, canal 1: 2400 us", 0) == 0, "K fuera de 500-2360 cancela la trayectoria", sin_nl(r));
+  r = correr("T CORRER");
+  revisa(r.rfind("E T: faltan puntos", 0) == 0, "después de cancelar no se puede correr", sin_nl(r));
+
+  // Los 12: 8 s no caben grabando; sin grabar sí
+  correr("S 1500 1500 1500 1500 1500 1500 1500 1500 1500 1500 1500 1500");
+  correr("T INICIO 4095 400");
+  salida.clear();
+  for (int i = 0; i < 400; i++) {
+    std::string l = "K";
+    for (int c = 0; c < 12; c++) l += " " + std::to_string(1500 + (i % 50));
+    mandar(l + "\n");
+    for (int k = 0; k < 4; k++) { principal::loop(); g_us += 200; hook_otra(); }
+  }
+  revisa(salida.find("OK K 400") != std::string::npos, "K con los 12 canales (líneas largas)", sin_nl(salida.substr(salida.size() > 40 ? salida.size() - 40 : 0)));
+  r = correr("T CORRER");
+  revisa(r.rfind("E T: muy larga para grabar 12 canales", 0) == 0, "T con 12 canales y 8 s no cabe grabando", sin_nl(r));
+  r = correr("T CORRER 0");
+  revisa(r.find("T FIN 400") != std::string::npos && g_pca_us[0] == 1549 && g_pca_us[11] == 1549,
+         "T CORRER 0: los 12 sin grabar", sin_nl(r));
+  // Los 12 grabando, 2 s: los de la auxiliar también llegan
+  correr("S 1500 1500 1500 1500 1500 1500 1500 1500 1500 1500 1500 1500");
+  correr("T INICIO 4095 100");
+  for (int i = 0; i < 100; i++) {
+    std::string l = "K";
+    for (int c = 0; c < 12; c++) l += " " + std::to_string(1500 + 4 * i);
+    mandar(l + "\n");
+    for (int k = 0; k < 4; k++) { principal::loop(); g_us += 200; hook_otra(); }
+  }
+  r = correr("T CORRER");
+  { size_t a = r.find("T DATOS");
+    int nc = 0, nf = 0, np = 0, sinLectura = 0, filas = 0;
+    if (a != std::string::npos) sscanf(r.c_str() + a, "T DATOS %d %d %d", &nc, &nf, &np);
+    size_t i = 0;
+    while (i < r.size()) {
+      size_t j = r.find('\n', i); if (j == std::string::npos) j = r.size();
+      std::string l = r.substr(i, j - i); i = j + 1;
+      if (l.rfind("M ", 0) == 0) { auto v = numeros(l, 1); filas++; for (size_t k = 1; k < v.size(); k++) if (v[k] < 0) sinLectura++; }
+    }
+    char d[120]; snprintf(d, sizeof d, "canales=%d filas=%d/%d sin lectura=%d", nc, filas, nf, sinLectura);
+    revisa(nc == 12 && filas == nf && nf > 950 && sinLectura == 0 && r.find("T FIN") != std::string::npos,
+           "T con los 12 grabando (FL y auxiliar)", d); }
+  // T se detiene si llega algo por USB
+  correr("P 0 1000"); correr("P 1 1200"); correr("P 2 1400");
+  correr("T INICIO 7 50");
+  for (int i = 0; i < 50; i++) { mandar("K 1000 1200 1400\n"); for (int k = 0; k < 4; k++) { principal::loop(); g_us += 200; hook_otra(); } }
+  salida.clear();
+  mandar("T CORRER\nD\n");
+  for (int i = 0; i < 300; i++) { principal::loop(); g_us += 200; hook_otra(); }
+  revisa(salida.find("E T: detenida") != std::string::npos && salida.find("OK D") != std::string::npos &&
+         salida.find("T DATOS") == std::string::npos, "T se detiene si llega un comando y luego lo atiende",
+         sin_nl(salida.substr(0, 110)));
   printf("\n%s (%d fallas)\n", fallas ? "HAY FALLAS" : "TODO BIEN", fallas);
   return fallas ? 1 : 0;
 }

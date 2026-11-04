@@ -9,3 +9,4 @@ cada una están en `datos/`.
 | [02](02_angulo_real.md) | Ángulo real del eje, con transportador | 2 nov 2026 |
 | [03](03_ruido_auxiliar.md) | Ruido de la ESP32 auxiliar, antes y después de su tierra | pospuesta |
 | [04](04_rampas.md) | Rampas: velocidad contra error, los 12 servos | 2 nov 2026 |
+| [05](05_marcha_aire.md) | Marcha en el aire con la pata FL | 3 nov 2026 |

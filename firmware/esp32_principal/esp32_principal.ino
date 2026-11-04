@@ -1,5 +1,5 @@
 /*
-  Arca9 — ESP32 PRINCIPAL (protocolo v2)
+  Arca9 — ESP32 PRINCIPAL (protocolo v3)
   --------------------------------------
   Va junto con esp32_aux/esp32_aux.ino (en la ESP32 auxiliar) y con los scripts de pc/
   (eficiencia_servos.py, angulo_real.py, ruido.py, rampas.py). La compu solo se conecta a esta
@@ -28,7 +28,8 @@
                  responde "R canal n media_mV sigma_mV min_mV max_mV"
     D            suelta todos los servos; responde "OK D"
     V            una lectura de los 12 cables verdes: "V mv0 mv1 ... mv11" (-1 = sin lectura)
-    ?            responde "OK1-RETRO listo PCA=ok FB=12 AUX=ok DESC=0 PROTO=2"
+    ?            responde "OK1-RETRO listo PCA=ok FB=12 AUX=ok DESC=0 PROTO=3 RESET=encendido SEG=12"
+                 (RESET = por qué arrancó la última vez; SEG = segundos desde entonces)
                  (FB = canales con retroalimentación; DESC = líneas de la auxiliar descartadas;
                  PROTO = versión del protocolo)
 
@@ -46,6 +47,28 @@
                  Si llega cualquier cosa por USB mientras corre, se detiene, el servo se queda
                  con el último pulso, responde "E G: detenida ..." y no manda datos.
 
+  Protocolo v3 (3 nov 2026): agrega S y T (varios servos a la vez); lo de v1 y v2 no cambia.
+    S us0 us1 ... us11
+                 los 12 pulsos a la vez (-1 = no cambiar ese canal, 0 = soltarlo); cada uno pasa
+                 por el límite de 2360 µs. Responde "S mv0 ... mv11", las 12 lecturas justo
+                 después (igual que V). No hace rampas: quien lo use manda cambios chicos.
+    T INICIO mascara n     prepara una trayectoria de n puntos (uno cada 20 ms, hasta 1500 = 30 s)
+                           para los canales de la máscara (bit i = canal i; 7 = canales 0, 1 y 2;
+                           4095 = los 12). Responde "OK T INICIO mascara n_canales n".
+    K us_a us_b ...        un punto: un pulso por canal de la máscara, en orden. Fuera de 500–2360
+                           da error y se cancela la trayectoria. Cada 32 puntos (y en el último)
+                           responde "OK K cuantos": la compu espera eso antes de seguir mandando.
+    T CORRER [grabar]      la ejecuta. El primer punto debe ser el pulso actual de cada canal (no da
+                           saltos). Con grabar = 1 (por defecto) graba los cables verdes de esos
+                           canales cada ~2 ms y al final manda:
+                             T DATOS n_canales n_filas n_puntos canal_a canal_b ...
+                             M t mv_a mv_b ...     n_filas líneas; t en décimas de ms
+                             C t us_a us_b ...     n_puntos líneas; cuándo se aplicó cada punto
+                             T FIN
+                           Con grabar = 0 solo responde "T FIN n_puntos" al terminar. Igual que G,
+                           cualquier cosa que llegue por USB la detiene y los servos se quedan donde
+                           iban. Grabando caben ~16 s con 3 canales y ~5.7 s con los 12.
+
   Los mV son los del pin, después del divisor. La compu los pasa a grados al calibrar, así que
   no importa qué divisor uses mientras el pin quede entre ~0.15 y ~2.45 V.
 
@@ -53,6 +76,7 @@
 */
 #include <Wire.h>
 #include <Adafruit_PWMServoDriver.h>
+#include <esp_system.h>
 
 const int N = 16;                      // canales del PCA9685
 const int N_SERVOS = 12;
@@ -81,7 +105,7 @@ Adafruit_PWMServoDriver pca(PCA_ADDR);
 bool pcaOk = false;
 int ultimoUs[N] = {0};                 // último pulso aplicado a cada canal (0 = suelto)
 
-char linea[48];                        // comando de la compu
+char linea[128];                       // comando de la compu (S y K llevan hasta 12 números)
 int largo = 0;
 
 int auxMv[N_AUX];                      // última lectura de cada verde de la auxiliar
@@ -236,10 +260,10 @@ void leerAux(int ch, int n) {
   Serial.printf("R %d %d %.1f %.2f %d %d\n", ch, nn, media, sigma, mn, mx);
 }
 
-void mandarV() {
+void lecturas(const char *prefijo) {      // "V mv0 ... mv11" (o "S ...")
   auxPoll();
   bool ok = auxOk();
-  Serial.print("V");
+  Serial.print(prefijo);
   for (int i = 0; i < N_SERVOS; i++) {
     int v = -1;
     if (FB_LOCAL[i] >= 0) v = medianaLocal(FB_LOCAL[i]);
@@ -249,10 +273,28 @@ void mandarV() {
   Serial.println();
 }
 
+void mandarV() { lecturas("V"); }
+
+// Por qué arrancó la ESP32. "encendido" también es al abrir el puerto USB o apretar EN;
+// "voltaje_bajo" = el brownout la reinició (la alimentación cayó, casi siempre por los servos).
+const char *razonReinicio() {
+  switch (esp_reset_reason()) {
+    case ESP_RST_POWERON: return "encendido";
+    case ESP_RST_BROWNOUT: return "voltaje_bajo";
+    case ESP_RST_PANIC: return "falla";
+    case ESP_RST_INT_WDT:
+    case ESP_RST_TASK_WDT:
+    case ESP_RST_WDT: return "watchdog";
+    case ESP_RST_SW: return "software";
+    case ESP_RST_EXT: return "externo";
+    default: return "otro";
+  }
+}
+
 void mandarEstado() {
   auxPoll();
-  Serial.printf("OK1-RETRO listo PCA=%s FB=%d AUX=%s DESC=%lu PROTO=2\n", pcaOk ? "ok" : "NO",
-                canalesConRetro(), auxOk() ? "ok" : "NO", auxDescartadas);
+  Serial.printf("OK1-RETRO listo PCA=%s FB=%d AUX=%s DESC=%lu PROTO=3 RESET=%s SEG=%lu\n", pcaOk ? "ok" : "NO",
+                canalesConRetro(), auxOk() ? "ok" : "NO", auxDescartadas, razonReinicio(), millis() / 1000);
 }
 
 // ------------------------------------------------------------------ rampas (G, protocolo v2)
@@ -267,6 +309,14 @@ struct MuestraRampa { uint32_t t; int16_t mv; };   // t en µs desde el inicio d
 struct CmdRampa { uint32_t t; int16_t us; };
 MuestraRampa *rampaM = nullptr;
 CmdRampa *rampaC = nullptr;
+
+// Memoria de grabación: se pide una sola vez y la comparten G y T (80 kB).
+const size_t GRAB_BYTES = sizeof(MuestraRampa) * RAMPA_MAX_MUESTRAS + sizeof(CmdRampa) * RAMPA_MAX_CMD;
+uint8_t *grab = nullptr;
+bool pedirGrabacion() {
+  if (!grab) grab = (uint8_t *)malloc(GRAB_BYTES);
+  return grab != nullptr;
+}
 
 // Pulso que toca en el instante t (µs desde el inicio): espera en a, sube a b, espera, baja a a,
 // espera; `vueltas` veces.
@@ -326,9 +376,9 @@ void rampa(char *p) {
                   (RAMPA_MAX_MUESTRAS - 200) * RAMPA_DT_LOCAL_US / 1e6);
     return;
   }
-  if (!rampaM) rampaM = (MuestraRampa *)malloc(sizeof(MuestraRampa) * RAMPA_MAX_MUESTRAS);
-  if (!rampaC) rampaC = (CmdRampa *)malloc(sizeof(CmdRampa) * RAMPA_MAX_CMD);
-  if (!rampaM || !rampaC) { Serial.println("E G: sin memoria"); return; }
+  if (!pedirGrabacion()) { Serial.println("E G: sin memoria"); return; }
+  rampaM = (MuestraRampa *)grab;
+  rampaC = (CmdRampa *)(grab + sizeof(MuestraRampa) * RAMPA_MAX_MUESTRAS);
 
   Serial.printf("OK G %d %ld %ld %ld %ld %ld %.0f\n", ch, a, b, vel, vueltas, esperaMs, total / 1000.0);
   int nM = 0, nC = 0;
@@ -381,6 +431,190 @@ void rampa(char *p) {
   Serial.printf("G FIN %d\n", ch);
 }
 
+// ------------------------------------------------------------------ varios servos a la vez (S y T, v3)
+
+const int TRAY_MAX_PUNTOS = 1500;               // un punto cada 20 ms: hasta 30 s
+const unsigned long TRAY_DT_US = 20000;
+const unsigned long TRAY_DT_MUESTRA_US = 2000;
+int16_t *trayUs = nullptr;                      // TRAY_MAX_PUNTOS x N_SERVOS pulsos
+uint32_t *trayTc = nullptr;                     // cuándo se aplicó cada punto (µs)
+int trayCh[N_SERVOS];
+int trayNch = 0, trayN = 0, trayCargados = 0;
+
+// S us0 ... us11: los 12 a la vez (-1 = no cambiar, 0 = soltar). Responde con las 12 lecturas.
+void ponerTodos(char *p) {
+  long v[N_SERVOS];
+  char *fin;
+  for (int i = 0; i < N_SERVOS; i++) {
+    v[i] = strtol(p, &fin, 10);
+    if (fin == p || v[i] < -1) {
+      Serial.println("E S: son 12 pulsos (us0 ... us11; -1 = no cambiar, 0 = soltar)");
+      return;
+    }
+    p = fin;
+  }
+  if (!pcaOk) { Serial.println("E S: sin PCA9685"); return; }
+  for (int i = 0; i < N_SERVOS; i++) {
+    if (v[i] == -1) continue;
+    if (v[i] == 0) { pca.setPWM(i, 0, 4096); ultimoUs[i] = 0; continue; }
+    long us = constrain(v[i], (long)US_MIN, (long)US_MAX_CH[i]);   // el límite duro manda siempre
+    pca.writeMicroseconds(i, (int)us);
+    ultimoUs[i] = (int)us;
+  }
+  lecturas("S");
+}
+
+void trayInicio(char *p) {
+  char *fin;
+  long mascara = strtol(p, &fin, 10);
+  bool ok = fin != p;
+  p = fin;
+  long n = strtol(p, &fin, 10);
+  ok = ok && fin != p;
+  trayN = 0;
+  if (!ok || mascara <= 0 || mascara >= (1L << N_SERVOS) || n < 1 || n > TRAY_MAX_PUNTOS) {
+    Serial.printf("E T: usa T INICIO mascara n (mascara 1-4095, n 1-%d)\n", TRAY_MAX_PUNTOS);
+    return;
+  }
+  if (!trayUs) trayUs = (int16_t *)malloc(sizeof(int16_t) * TRAY_MAX_PUNTOS * N_SERVOS);
+  if (!trayTc) trayTc = (uint32_t *)malloc(sizeof(uint32_t) * TRAY_MAX_PUNTOS);
+  if (!trayUs || !trayTc) { Serial.println("E T: sin memoria"); return; }
+  trayNch = 0;
+  for (int i = 0; i < N_SERVOS; i++)
+    if (mascara & (1L << i)) trayCh[trayNch++] = i;
+  trayN = (int)n;
+  trayCargados = 0;
+  Serial.printf("OK T INICIO %ld %d %d\n", mascara, trayNch, trayN);
+}
+
+void trayPunto(char *p) {
+  if (trayN == 0 || trayCargados >= trayN) { Serial.println("E K: primero T INICIO (o ya estan todos los puntos)"); return; }
+  int16_t *fila = trayUs + (size_t)trayCargados * N_SERVOS;
+  char *fin;
+  for (int j = 0; j < trayNch; j++) {
+    long us = strtol(p, &fin, 10);
+    int ch = trayCh[j];
+    if (fin == p) {
+      Serial.printf("E K: el punto %d necesita %d pulsos; se cancela la trayectoria\n", trayCargados, trayNch);
+      trayN = 0;
+      return;
+    }
+    if (us < US_MIN || us > US_MAX_CH[ch]) {          // en una trayectoria, fuera de rango es un error
+      Serial.printf("E K: punto %d, canal %d: %ld us fuera de %d-%d; se cancela la trayectoria\n",
+                    trayCargados, ch, us, US_MIN, US_MAX_CH[ch]);
+      trayN = 0;
+      return;
+    }
+    fila[j] = (int16_t)us;
+    p = fin;
+  }
+  trayCargados++;
+  if (trayCargados % 32 == 0 || trayCargados == trayN) Serial.printf("OK K %d\n", trayCargados);
+}
+
+void trayCorrer(char *p) {
+  char *fin;
+  long g = strtol(p, &fin, 10);
+  bool grabar = (fin == p) ? true : (g != 0);
+  if (trayN == 0 || trayCargados != trayN) {
+    Serial.printf("E T: faltan puntos (%d de %d)\n", trayCargados, trayN);
+    return;
+  }
+  if (!pcaOk) { Serial.println("E T: sin PCA9685"); return; }
+  bool usaAux = false;
+  for (int j = 0; j < trayNch; j++)
+    if (FB_AUX[trayCh[j]] >= 0) usaAux = true;
+  auxPoll();
+  if (usaAux && !auxOk()) { Serial.println("E T: la auxiliar no manda datos"); return; }
+  for (int j = 0; j < trayNch; j++) {                      // nada de saltos
+    int ch = trayCh[j];
+    if (ultimoUs[ch] != trayUs[j]) {
+      Serial.printf("E T: primero manda P %d %d (el canal esta en %d)\n", ch, trayUs[j], ultimoUs[ch]);
+      return;
+    }
+  }
+  unsigned long total = (unsigned long)trayN * TRAY_DT_US;
+  size_t filaBytes = 4 + 2 * (size_t)trayNch;
+  long maxFilas = 0;
+  if (grabar) {
+    if (!pedirGrabacion()) { Serial.println("E T: sin memoria"); return; }
+    maxFilas = (long)(GRAB_BYTES / filaBytes);
+    long necesarias = (long)(total / TRAY_DT_MUESTRA_US) + 10;
+    if (necesarias > maxFilas) {
+      Serial.printf("E T: muy larga para grabar %d canales (maximo ~%.1f s; o T CORRER 0 sin grabar)\n",
+                    trayNch, (maxFilas - 10) * TRAY_DT_MUESTRA_US / 1e6);
+      return;
+    }
+  }
+  Serial.printf("OK T CORRER %d %d %lu\n", trayNch, trayN, total / 1000);
+  long nF = 0;
+  int k = 0;
+  bool detenida = false;
+  const char *razon = "";
+  unsigned long t0 = micros(), sigM = 0;
+  while (true) {
+    unsigned long t = micros() - t0;
+    if (t >= total) break;
+    if (Serial.available()) { detenida = true; razon = "llego un comando por USB"; break; }
+    if (k < trayN && t >= (unsigned long)k * TRAY_DT_US) {
+      int16_t *fila = trayUs + (size_t)k * N_SERVOS;
+      for (int j = 0; j < trayNch; j++) {
+        pca.writeMicroseconds(trayCh[j], fila[j]);
+        ultimoUs[trayCh[j]] = fila[j];
+      }
+      trayTc[k++] = (uint32_t)t;
+      if (usaAux && !auxOk()) { detenida = true; razon = "la auxiliar dejo de mandar datos"; break; }
+    }
+    if (grabar && t >= sigM) {
+      if (nF < maxFilas) {
+        uint8_t *q = grab + (size_t)nF * filaBytes;
+        uint32_t tm = (uint32_t)(micros() - t0);
+        memcpy(q, &tm, 4);                                  // memcpy: sin accesos desalineados
+        bool auxBien = auxOk();
+        for (int j = 0; j < trayNch; j++) {
+          int ch = trayCh[j];
+          int16_t mv = FB_LOCAL[ch] >= 0 ? (int16_t)medianaLocal(FB_LOCAL[ch])
+                                         : (int16_t)(auxBien ? auxMv[FB_AUX[ch]] : -1);
+          memcpy(q + 4 + 2 * j, &mv, 2);
+        }
+        nF++;
+      }
+      sigM += TRAY_DT_MUESTRA_US;
+    }
+    auxPoll();
+  }
+  if (detenida) {
+    Serial.printf("E T: detenida en el punto %d de %d (%s); los servos se quedan donde iban\n", k, trayN, razon);
+    return;
+  }
+  if (!grabar) { Serial.printf("T FIN %d\n", k); return; }
+
+  Serial.printf("T DATOS %d %ld %d", trayNch, nF, trayN);
+  for (int j = 0; j < trayNch; j++) Serial.printf(" %d", trayCh[j]);
+  Serial.println();
+  for (long i = 0; i < nF; i++) {
+    uint8_t *q = grab + (size_t)i * filaBytes;
+    uint32_t tm;
+    memcpy(&tm, q, 4);
+    Serial.printf("M %lu", (unsigned long)(tm / 100));
+    for (int j = 0; j < trayNch; j++) {
+      int16_t mv;
+      memcpy(&mv, q + 4 + 2 * j, 2);
+      Serial.printf(" %d", mv);
+    }
+    Serial.println();
+    if ((i & 63) == 0) auxPoll();
+  }
+  for (int i = 0; i < trayN; i++) {
+    Serial.printf("C %lu", (unsigned long)(trayTc[i] / 100));
+    int16_t *fila = trayUs + (size_t)i * N_SERVOS;
+    for (int j = 0; j < trayNch; j++) Serial.printf(" %d", fila[j]);
+    Serial.println();
+    if ((i & 63) == 0) auxPoll();
+  }
+  Serial.println("T FIN");
+}
+
 // ------------------------------------------------------------------ comandos
 
 void atender(char *s) {
@@ -413,6 +647,15 @@ void atender(char *s) {
     mandarV();
   } else if (c == 'G') {
     rampa(p);
+  } else if (c == 'S') {
+    ponerTodos(p);
+  } else if (c == 'K') {
+    trayPunto(p);
+  } else if (c == 'T') {
+    while (*p == ' ') p++;
+    if (strncmp(p, "INICIO", 6) == 0) trayInicio(p + 6);
+    else if (strncmp(p, "CORRER", 6) == 0) trayCorrer(p + 6);
+    else Serial.println("E T: usa T INICIO mascara n, luego K ..., luego T CORRER");
   } else if (c == '?') {
     mandarEstado();
   } else if (c != 0) {
@@ -421,6 +664,7 @@ void atender(char *s) {
 }
 
 void setup() {
+  Serial.setRxBufferSize(1024);                            // caben varias líneas K seguidas
   Serial.begin(115200);
   pinMode(PIN_LED, OUTPUT);
   pinMode(PIN_OE, OUTPUT);

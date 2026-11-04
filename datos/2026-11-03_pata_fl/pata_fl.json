@@ -1,0 +1,32 @@
+{
+  "pata": "FL",
+  "fecha": "2026-11-03",
+  "metodo": "Medido por Adán con la pata armada (SpotMicro KDY0523, pie v2), los servos sueltos y rampas.py --revisar --canal 0 1 2. Ángulos en grados reales del servo (tabla de la prueba 01 + factor de la prueba 02).",
+  "canales": {"abd": 0, "cad": 1, "rod": 2},
+  "medidas_cm": {
+    "muslo": 11.0,
+    "espinilla": 13.0,
+    "hombro": 5.5,
+    "nota": "De eje a eje. Muslo: cadera a rodilla. Espinilla: rodilla a la punta del pie. Hombro: de lado, del eje de la abducción al centro de la pata."
+  },
+  "limites_grados": {
+    "abd": [20.0, 135.0],
+    "cad": [0.0, 150.0],
+    "rod": [15.0, 174.6],
+    "nota": "Donde la pieza apenas choca. La rodilla llega hasta el límite del servo (2360 µs = 174.6° reales)."
+  },
+  "pose_recta_grados": {
+    "abd": 87.8, "cad": 86.6, "rod": 162.6,
+    "nota": "Toda la pata recta, apuntando derecho hacia abajo, vista de frente vertical."
+  },
+  "pose_de_pie_grados": {
+    "abd": 87.9, "cad": 123.0, "rod": 84.5,
+    "nota": "Como el dibujo: pata vertical vista de frente, pie debajo de la cadera, rodilla doblada."
+  },
+  "sentido": {
+    "abd": "al subir el ángulo, la pata se mete hacia el cuerpo",
+    "cad": "al subir el ángulo, la pata se va hacia atrás",
+    "rod": "al subir el ángulo, la rodilla se estira"
+  },
+  "rodilla": "el servo la mueve directo, sin varilla"
+}

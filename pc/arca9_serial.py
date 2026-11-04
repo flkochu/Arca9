@@ -7,9 +7,11 @@ El protocolo está en docs/hardware.md (USB a 115200 baud, una línea por comand
     R canal n    -> "R canal n media sigma min max"   (mV del pin)
     V            -> "V mv0 ... mv11"  (-1 = sin lectura)
     D            -> "OK D"            (suelta todos los servos)
-    ?            -> "OK1-RETRO listo PCA=ok FB=12 AUX=ok DESC=0 PROTO=2"
+    ?            -> "OK1-RETRO listo PCA=ok FB=12 AUX=ok DESC=0 PROTO=3 RESET=encendido SEG=12"
     G canal us_a us_b vel vueltas espera_ms   -> rampa hecha por la ESP32 (protocolo v2);
                  al terminar manda "G DATOS", las líneas M (t, mV) y C (t, µs) y "G FIN"
+    S us0 ... us11 -> "S mv0 ... mv11"  los 12 a la vez (-1 = no cambiar, 0 = soltar) (v3)
+    T INICIO mascara n / K ... / T CORRER [grabar]   trayectoria de varios servos (v3)
 
 eficiencia_servos.py y angulo_real.py tienen su propia copia de esto (se escribieron antes);
 los scripts nuevos usan este archivo.
@@ -20,6 +22,11 @@ import time
 
 class ErrorESP32(RuntimeError):
     pass
+
+
+REINICIO = ("la ESP32 se reinició a media prueba (mandó su mensaje de arranque). Casi siempre es una caída "
+            "de voltaje cuando se mueven los servos: revisa la fuente de 6 V, que la ESP32 no se alimente de "
+            "la misma fuente sin protección y la tierra común. Con '?' en el Monitor Serie, RESET dice la razón.")
 
 
 class ESP32:
@@ -68,7 +75,7 @@ class ESP32:
             raise ErrorESP32("la ESP32 no contesta. Revisa el puerto, aprieta EN en la ESP32 y vuelve "
                              "a intentar.")
         info = {"linea": l}
-        for k in ("PCA", "FB", "AUX", "DESC", "PROTO"):
+        for k in ("PCA", "FB", "AUX", "DESC", "PROTO", "RESET", "SEG"):
             m = re.search(k + r"=(\w+)", l)
             if m:
                 info[k.lower()] = int(m.group(1)) if m.group(1).isdigit() else m.group(1)
@@ -103,6 +110,8 @@ class ESP32:
                 raise ErrorESP32(f"la rampa del canal {ch} no terminó a tiempo")
             if l.startswith("E "):
                 raise ErrorESP32(f"la ESP32 detuvo la rampa: {l}")
+            if l.startswith("OK1-RETRO"):
+                raise ErrorESP32(REINICIO)
             if l.startswith("G DATOS"):
                 break
         _, _, c, n_m, n_c = l.split()
@@ -129,6 +138,81 @@ class ESP32:
             raise ErrorESP32(f"datos de la rampa incompletos: {len(M)}/{n_m} M, {len(C)}/{n_c} C, "
                              f"{malas} líneas dañadas")
         return {"total_s": total_s, "M": M, "C": C}
+
+    def mover_todos(self, us):
+        """Comando S: 12 pulsos (-1 = no cambiar, 0 = soltar). Regresa las 12 lecturas (None = sin)."""
+        if len(us) != 12:
+            raise ValueError("S necesita 12 pulsos")
+        p = self.comando("S " + " ".join(str(int(u)) for u in us), "S ", 1.0).split()[1:]
+        return [None if int(x) < 0 else int(x) for x in p]
+
+    def trayectoria(self, canales, puntos, grabar=True):
+        """Comando T. `puntos` = lista de listas de µs (una por punto, un valor por canal, en el orden
+        de `canales`); un punto cada 20 ms. Regresa {"canales", "M": [(t_s, [mv...])],
+        "C": [(t_s, [us...])]} (vacíos si grabar=False)."""
+        canales = sorted(canales)
+        mascara = sum(1 << c for c in canales)
+        self.comando(f"T INICIO {mascara} {len(puntos)}", "OK T INICIO", 1.0)
+        for i in range(0, len(puntos), 32):                  # 32 puntos y esperar "OK K"
+            bloque = puntos[i:i + 32]
+            self.s.write("".join("K " + " ".join(str(int(u)) for u in p) + "\n" for p in bloque).encode())
+            self.comando_sin_enviar(f"OK K {i + len(bloque)}", 2.0)
+        l = self.comando("T CORRER" + ("" if grabar else " 0"), "OK T CORRER", 1.0)
+        total_s = float(l.split()[-1]) / 1000.0
+        limite = time.time() + total_s + 5.0
+        while True:
+            l = self._linea(limite)
+            if l is None:
+                raise ErrorESP32("la trayectoria no terminó a tiempo y la ESP32 dejó de contestar: o se reinició "
+                                 "sin alcanzar a avisar, o Windows perdió la conexión USB (desconecta y conecta el "
+                                 "USB, y revisa con '?' en el Monitor Serie qué dice RESET y SEG)")
+            if l.startswith("E "):
+                raise ErrorESP32(f"la ESP32 detuvo la trayectoria: {l}")
+            if l.startswith("OK1-RETRO"):
+                raise ErrorESP32(REINICIO)
+            if not grabar and l.startswith("T FIN"):
+                return {"canales": canales, "M": [], "C": [], "total_s": total_s}
+            if l.startswith("T DATOS"):
+                break
+        p = l.split()
+        n_c, n_f, n_p = int(p[2]), int(p[3]), int(p[4])
+        canales_fw = [int(x) for x in p[5:5 + n_c]]
+        if canales_fw != canales:
+            raise ErrorESP32(f"la ESP32 grabó otros canales: {canales_fw}")
+        limite = time.time() + 2 * (n_f * (8 + 5 * n_c) + n_p * (8 + 5 * n_c)) / 11520 + 5.0
+        M, C, malas = [], [], 0
+        while True:
+            l = self._linea(limite)
+            if l is None:
+                raise ErrorESP32(f"se cortaron los datos de la trayectoria ({len(M)}/{n_f} M, {len(C)}/{n_p} C)")
+            if l.startswith("M ") or l.startswith("C "):
+                try:
+                    v = [int(x) for x in l.split()[1:]]
+                    if len(v) != n_c + 1:
+                        raise ValueError
+                    (M if l[0] == "M" else C).append((v[0] / 1e4, v[1:]))
+                except ValueError:
+                    malas += 1
+            elif l.startswith("T FIN"):
+                break
+            elif l.startswith("E "):
+                raise ErrorESP32(f"la ESP32 contestó durante los datos: {l}")
+        if malas or len(M) != n_f or len(C) != n_p:
+            raise ErrorESP32(f"datos de la trayectoria incompletos: {len(M)}/{n_f} M, {len(C)}/{n_p} C, "
+                             f"{malas} líneas dañadas")
+        return {"canales": canales, "M": M, "C": C, "total_s": total_s}
+
+    def comando_sin_enviar(self, prefijo, timeout=1.0):
+        """Espera una línea que empiece con `prefijo` (sin mandar nada)."""
+        limite = time.time() + timeout
+        while True:
+            l = self._linea(limite)
+            if l is None:
+                raise ErrorESP32(f"la ESP32 no contestó '{prefijo}'")
+            if l.startswith(prefijo):
+                return l
+            if l.startswith("E "):
+                raise ErrorESP32(f"la ESP32 contestó: {l}")
 
     def soltar(self):
         try:

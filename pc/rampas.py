@@ -68,7 +68,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 from arca9_serial import ESP32, ErrorESP32
-from escala import Escala, Retro, US_CERO, US_LIMITE, N_SERVOS
+from escala import Escala, Retro, US_CERO, US_LIMITE, N_SERVOS, MV_MIN, MV_MAX
 
 VELOCIDADES = [60, 100, 120, 160, 180, 200, 220, 240]
 DESDE, HASTA = 30.0, 150.0             # grados reales
@@ -254,9 +254,10 @@ def revisar_inicio(esp, canales):
         raise ErrorESP32("la auxiliar no está mandando datos (AUX=NO). Revisa TX/RX cruzados (16 <-> 17), "
                          "GND común y que tenga esp32_aux.ino.")
     v = esp.leer_todos()
-    malos = [c for c in canales if v[c] is None or not 60 <= v[c] <= 2500]
+    # Con el cable verde suelto el pin no lee 0: el ADC no baja de ~142 mV. En su tope el servo da ~180 mV.
+    malos = [c for c in canales if v[c] is None or not MV_MIN <= v[c] <= MV_MAX]
     if malos:
-        raise ErrorESP32("cables verdes fuera de rango (lo normal es 190–1870 mV): "
+        raise ErrorESP32(f"cables verdes fuera de rango (lo creíble es {MV_MIN}–{MV_MAX} mV; ¿cable suelto?): "
                          + ", ".join(f"{c} ({corto(c)}) = {v[c]}" for c in malos))
     return v
 

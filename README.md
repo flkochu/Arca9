@@ -16,7 +16,7 @@ Este repositorio empieza de cero el 29 de octubre de 2026, con la prueba de efic
 | Hecho | Prueba 02: ángulo real con el transportador. El eje gira 4.3 % más que la convención: 10.65 µs por grado real (`pc/escala.py`) |
 | Pospuesta | Prueba 03: ruido de la ESP32 auxiliar (`pc/ruido.py` está listo) |
 | Hecho | Prueba 04: rampas. Atraso de ~100 ms a todas las velocidades; sin saturación hasta 240 °/s (`pc/rampas.py`, comando `G`) |
-| Sigue | Marcha en el aire con una pata |
+| Hecho | Prueba 05: marcha en el aire con la pata FL. Con el comando adelantado 100 ms, el error del pie baja de 1–2 cm a 0.5 cm (`pc/marcha.py`, comando `T`) |
 
 ## Hardware
 
@@ -39,6 +39,8 @@ pc/eficiencia_servos.py     prueba 01, eficiencia: mide, calcula y grafica
 pc/angulo_real.py           prueba 02, ángulo real con el transportador impreso
 pc/ruido.py                 prueba 03, ruido de los cables verdes con el servo quieto
 pc/rampas.py                prueba 04, rampas: velocidad contra error (comando G)
+pc/marcha.py                prueba 05, un paso en el aire con la pata FL (comando T)
+pc/pata.py                  la pata: convención de ángulos, cinemática y límites
 pc/escala.py                µs <-> grados reales y mV -> grados reales (lo usan los scripts nuevos)
 pc/arca9_serial.py          comandos de la ESP32 principal (P, R, V, D, ?) para los scripts nuevos
 pruebas/arnes_firmware/     corre los dos firmwares en la compu para probarlos sin las placas
@@ -76,6 +78,7 @@ Para practicar sin el hardware: `python pc/eficiencia_servos.py --simulado`.
 | [02](docs/bitacora/02_angulo_real.md) | Ángulo real del eje, con transportador | 2 nov 2026 | El eje gira 1.043 × la convención: 10.65 µs por grado real |
 | [03](docs/bitacora/03_ruido_auxiliar.md) | Ruido de la ESP32 auxiliar, antes y después de su tierra | pospuesta | — |
 | [04](docs/bitacora/04_rampas.md) | Rampas: velocidad contra error, los 12 servos | 2 nov 2026 | Atraso de ~100 ms a todas las velocidades; error = velocidad × 0.1 s; sin saturación hasta 240 °/s |
+| [05](docs/bitacora/05_marcha_aire.md) | Marcha en el aire con la pata FL | 3 nov 2026 | Adelanto de 100 ms: error del pie de 1–2 cm a 0.5 cm a todas las velocidades; queda un error fijo de ~0.5 cm |
 
 ## Créditos
 

@@ -37,6 +37,7 @@ US_CERO = 500                       # 0° (convención y real comparten el cero)
 US_POR_GRADO_CONV = 2000.0 / 180.0  # 11.11 µs/°, la convención de las pruebas 01 y 02
 US_LIMITE = 2360                    # el mismo límite duro del firmware (US_MAX_CH)
 N_SERVOS = 12
+MV_MIN, MV_MAX = 165, 1950       # lecturas creíbles del cable verde; fuera = cable suelto o divisor mal
 
 
 def buscar_en_datos(nombre):

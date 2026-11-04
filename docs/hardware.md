@@ -94,13 +94,18 @@ verde ──[100 kΩ]──┬── GPIO
   de `datos/2026-11-02_angulo_real/escala.json`. Si se cambia el PCA9685, hay que repetir la
   prueba 02.
 
-## Protocolo de la ESP32 principal (versión 2)
+## Protocolo de la ESP32 principal (versión 3)
 
 USB a 115200 baud, una línea por comando. Sirven "New Line" y "Both NL & CR".
 
-**Versiones.** v1 (29 oct 2026): `P`, `R`, `D`, `V` y `?`. **v2 (2 nov 2026): agrega `G`**, y `?`
-dice `PROTO=2`. Lo de v1 no cambió, así que los scripts viejos siguen funcionando. Un script que
-necesita `G` revisa primero que `?` diga `PROTO=2`.
+**Versiones.**
+- v1 (29 oct 2026): `P`, `R`, `D`, `V` y `?`.
+- **v2 (2 nov 2026): agrega `G`** (rampa de un servo).
+- **v3 (3 nov 2026): agrega `S` y `T`** (varios servos a la vez, hasta los 12), y `?` dice
+  `PROTO=3`.
+
+Cada versión solo agrega comandos, así que los scripts viejos siguen funcionando. Un script que
+necesita un comando nuevo revisa primero el número de `PROTO` en `?`.
 
 | Comando | Respuesta |
 |---|---|
@@ -108,8 +113,10 @@ necesita `G` revisa primero que `?` diga `PROTO=2`.
 | `R canal n` | `R canal n media_mV sigma_mV min_mV max_mV`: n lecturas, 0.5 ms entre ellas |
 | `D` | `OK D`: suelta todos los servos |
 | `V` | `V mv0 … mv11`: una lectura de los 12 (-1 = sin lectura) |
-| `?` | `OK1-RETRO listo PCA=ok FB=12 AUX=ok DESC=0 PROTO=2` |
+| `?` | `OK1-RETRO listo PCA=ok FB=12 AUX=ok DESC=0 PROTO=3 RESET=encendido SEG=12`. `RESET` = por qué arrancó la última vez (`encendido` también es al abrir el puerto o apretar EN; `voltaje_bajo` = se cayó la alimentación); `SEG` = segundos desde entonces |
 | `G canal us_a us_b vel vueltas espera_ms` | Rampa de un servo hecha por la ESP32 (v2). Ver abajo |
+| `S us0 … us11` | `S mv0 … mv11`: los 12 pulsos a la vez y las 12 lecturas (v3). Ver abajo |
+| `T INICIO mascara n` · `K …` · `T CORRER [grabar]` | Trayectoria de varios servos a la vez, con grabación (v3). Ver abajo |
 
 ### `G`: rampa de un servo (v2)
 
@@ -139,6 +146,44 @@ G FIN canal
 
 A 115200 baud los datos tardan ~0.55 s por cada segundo de rampa (~10 s para una de 15.5 s).
 
+### `S`: los 12 a la vez (v3)
+
+`S us0 us1 … us11`: un pulso por canal, en orden; `-1` = no cambiar ese canal, `0` = soltarlo.
+Cada pulso pasa por el límite de 2360 µs. Responde `S mv0 … mv11`, las 12 lecturas justo después,
+igual que `V`. Es para un control en tiempo real desde la compu (por ejemplo, el puente con
+Agmen): una línea de ida y una de vuelta, ~11 ms a 115200 baud. **No hace rampas:** quien lo use
+tiene que mandar cambios chicos.
+
+### `T`: trayectoria de varios servos (v3)
+
+1. `T INICIO mascara n`: prepara n puntos (uno cada 20 ms, hasta 1500 = 30 s) para los canales de
+   la máscara: bit i = canal i (7 = canales 0, 1 y 2; 4095 = los 12). Responde
+   `OK T INICIO mascara n_canales n`.
+2. `K us_a us_b …`: un punto, con un pulso por canal de la máscara en orden. Un pulso fuera de
+   500–2360 da error y cancela la trayectoria (en una trayectoria es un error, no se recorta).
+   Cada 32 puntos, y en el último, responde `OK K cuantos`; la compu espera eso antes de mandar
+   más.
+3. `T CORRER [grabar]`: la ejecuta. El primer punto debe ser el pulso actual de cada canal (no da
+   saltos). Al terminar, los servos se quedan en el último punto.
+   - Con `grabar` = 1 (por defecto) graba el cable verde de esos canales cada ~2 ms: FL con la
+     mediana de 5, y FR, RL y RR con la última línea de la auxiliar. Caben ~16 s con 3 canales y
+     ~5.7 s con los 12.
+   - Con `grabar` = 0 no graba y solo responde `T FIN n_puntos`.
+   - Igual que `G`, cualquier cosa que llegue por USB la detiene y los servos se quedan donde
+     iban.
+
+Respuesta grabando:
+
+```
+OK T CORRER n_canales n_puntos total_ms
+T DATOS n_canales n_filas n_puntos canal_a canal_b ...
+M t mv_a mv_b ...       (n_filas líneas; t en décimas de ms)
+C t us_a us_b ...       (n_puntos líneas; cuándo se aplicó cada punto)
+T FIN
+```
+
+`G` y `T` comparten la misma memoria de grabación (80 kB).
+
 Entre las ESP32 (921600 baud), la auxiliar manda `A v0 … v8 c` cada 2 ms, con
 c = (v0 + … + v8) % 1000, y contesta `R k n` con `R k n media sigma min max`.
 
@@ -151,3 +196,4 @@ c = (v0 + … + v8) % 1000, y contesta `R k n` con `R k n media sigma min max`.
 | El servo zumba en 2500 µs | El servo ya llegó a su tope: no se le debe mandar más de 2360 µs |
 | Arduino: `No space left on device` o `Failed to extract python313.dll` | Disco C: lleno; borra `%LOCALAPPDATA%\Temp\arduino` |
 | `no se pudo abrir COM6` | El Monitor Serie de Arduino sigue abierto |
+| `la trayectoria no terminó a tiempo` y luego `no contestó a 'V'` (3 nov, prueba 05) | La ESP32 se reinició o Windows perdió el USB a media corrida. Con `?`: si `SEG` es chico, se reinició, y `RESET` dice por qué |
