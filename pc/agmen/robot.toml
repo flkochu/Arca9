@@ -1,0 +1,80 @@
+# robot.toml — Arca9 con Agmen, CON EL PERRO (la ESP32 principal por USB).
+#
+#   agmen run pc/agmen/robot.toml
+#
+# Sin el perro: robot_simulado.toml (es este mismo, con --simulado en lugar de --port).
+# Las rutas son relativas a este archivo; "python" es el mismo Python que corre agmen (necesita
+# pyserial: pip install -r pc/requirements.txt). Docs: docs/bitacora/06_puente_agmen.md.
+#
+#   poses.py ──► /arca9/comando/poses ─┐ prioridad 1
+#                                      ├─► mux "mando" ──► /arca9/comando ──► puente.py ──S──► ESP32
+#   panel ──► /arca9/teleop ──► manejo.py ──► /arca9/comando/panel ─┘ prioridad 10
+#                                                                       puente.py ──► /arca9/articulaciones
+#                                                                                 └─► /arca9/estado
+
+[robot]
+name = "Arca9"
+
+[[node]]
+name = "puente"
+# Cambia COM6 por tu puerto (Linux: /dev/ttyUSB0). Primera prueba: --vel-max 20 y el perro colgado.
+cmd = "python puente.py --port COM6 --vel-max 20"
+# restart = "never" (el default): si el puente se cae, que lo vuelva a prender una persona (▶).
+
+[[node]]
+name = "poses"
+cmd = "python poses.py --secuencia parado sentado parado echado --espera 3 --vel 15"
+autostart = false              # no se mueve nada hasta que lo prendas (▶) desde el panel
+
+[[node]]
+name = "manejo"                # traduce las flechas del panel a Arca9Comando
+cmd = "python manejo.py"
+
+# ¿Quién manda? El panel le gana a poses.py; al soltar las flechas, en 0.3 s regresa el mando.
+[[mux]]
+name = "mando"
+output = "/arca9/comando"
+hold_ms = 300
+
+[[mux.input]]
+name = "panel"
+topic = "/arca9/comando/panel"
+priority = 10
+
+[[mux.input]]
+name = "poses"
+topic = "/arca9/comando/poses"
+priority = 1
+
+[[topic]]
+name = "/arca9/articulaciones"
+type = "Arca9Articulaciones"
+required = true
+
+[[topic]]
+name = "/arca9/estado"
+type = "Arca9Estado"
+required = true
+
+[[topic]]
+name = "/arca9/comando"
+type = "Arca9Comando"
+
+[[topic]]
+name = "/arca9/comando/panel"
+type = "Arca9Comando"
+
+[[topic]]
+name = "/arca9/comando/poses"
+type = "Arca9Comando"
+
+[[topic]]
+name = "/arca9/teleop"
+type = "MotorCommand"
+
+[web]
+http = "127.0.0.1:8080"
+
+[web.teleop]
+target = "/arca9/teleop"       # las flechas del panel van a manejo.py
+max_speed = 1.0
