@@ -1,0 +1,68 @@
+# arca9.agmen — los mensajes del puente entre Arca9 y Agmen (pc/agmen/).
+#
+#   Revisar sin correr nada:  agmen gen arca9.agmen
+#   Python:                   msgs = agmen.load("arca9.agmen")   (puente.py, poses.py y manejo.py)
+#
+# Ángulos: grados REALES del eje de cada servo (pc/escala.py: tabla de la prueba 01 y factor de la
+# prueba 02), no los de la convención de 11.11 µs por grado.
+# Canales como en docs/hardware.md: FL 0-2, FR 3-5, RL 6-8, RR 9-11; en cada pata, abducción,
+# cadera y rodilla.
+package arca9
+
+const u8 SERVOS = 12
+
+# Por qué arrancó la ESP32 la última vez: el RESET de '?' (docs/hardware.md).
+enum Reset : u8 {
+    DESCONOCIDO = 0               # todavía no se sabe (no ha contestado)
+    ENCENDIDO = 1                 # al conectar el USB, abrir el puerto o apretar EN
+    VOLTAJE_BAJO = 2              # se cayó la alimentación (brownout), casi siempre por los servos
+    FALLA = 3                     # el firmware tronó (panic)
+    WATCHDOG = 4
+    SOFTWARE = 5
+    EXTERNO = 6
+    OTRO = 7
+}
+
+# Qué está haciendo el puente.
+enum Modo : u8 {
+    SUELTO = 0                    # todavía no llega ningún comando: los servos siguen sueltos
+    SIGUIENDO = 1                 # sigue el comando, con la velocidad limitada
+    QUIETO = 2                    # watchdog: sin comandos en 0.5 s, se queda donde va
+    REINICIADA = 3                # la ESP32 se reinició: servos sueltos hasta reiniciar el puente
+    SIN_ESP32 = 4                 # la ESP32 no contesta
+}
+
+# Lo que mide el perro: los 12 cables verdes, en grados reales.
+message Arca9Articulaciones {
+    f32[12] q                     # grados reales de cada servo; NaN = sin lectura creíble
+}
+
+# Lo que se le pide al perro: un ángulo objetivo por servo.
+message Arca9Comando {
+    f32[12] q                     # grados reales objetivo de cada servo
+    bool[12] activo               # false = ese servo no se toca (se queda como esté)
+}
+
+# Cómo va el puente y la ESP32.
+message Arca9Estado {
+    bool conectado                # la ESP32 contesta
+    u8 proto                      # PROTO de '?' (el puente necesita 3, por el comando S)
+    Reset reset                   # RESET de '?': por qué arrancó la ESP32
+    u32 seg                       # SEG de '?': segundos desde que arrancó la ESP32
+    bool aux                      # la auxiliar manda datos (AUX=ok): sin ella no hay lecturas de FR, RL y RR
+    Modo modo
+    u32 reinicios                 # veces que la ESP32 se reinició mientras corría el puente
+    u32 errores                   # respuestas que no llegaron o llegaron dañadas
+    u32 ciclos                    # comandos S hechos
+    f32 ciclo_ms                  # lo que tardó el último S, de ida y vuelta
+    f32 vel_max                   # °/s: lo más rápido que el puente deja ir a cada servo
+    bool[12] limitado             # el comando de ese servo pedía salir de sus límites y se recortó
+    bool[12] bloqueado            # pedido pero sin mover: sin límites medidos o sin lectura creíble
+}
+
+# Lo que manda la sección "Manejar" del panel de Agmen ([web.teleop]). Es el tipo del panel:
+# no le cambies los campos, o el panel y manejo.py ya no se entienden.
+message MotorCommand {
+    f32 left
+    f32 right
+}

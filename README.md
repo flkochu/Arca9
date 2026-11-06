@@ -17,6 +17,7 @@ Este repositorio empieza de cero el 29 de octubre de 2026, con la prueba de efic
 | Pospuesta | Prueba 03: ruido de la ESP32 auxiliar (`pc/ruido.py` está listo) |
 | Hecho | Prueba 04: rampas. Atraso de ~100 ms a todas las velocidades; sin saturación hasta 240 °/s (`pc/rampas.py`, comando `G`) |
 | Hecho | Prueba 05: marcha en el aire con la pata FL. Con el comando adelantado 100 ms, el error del pie baja de 1–2 cm a 0.5 cm (`pc/marcha.py`, comando `T`) |
+| Hecho en simulación | 06: puente con Agmen. El panel web ve los 12 ángulos a 50 Hz y maneja al perro; poses parado, sentado y echado (`pc/agmen/`, comando `S`). Falta la primera prueba con el perro |
 
 ## Hardware
 
@@ -43,7 +44,10 @@ pc/marcha.py                prueba 05, un paso en el aire con la pata FL (comand
 pc/pata.py                  la pata: convención de ángulos, cinemática y límites
 pc/escala.py                µs <-> grados reales y mV -> grados reales (lo usan los scripts nuevos)
 pc/arca9_serial.py          comandos de la ESP32 principal (P, R, V, D, ?) para los scripts nuevos
+pc/agmen/                   06, puente con Agmen: arca9.agmen, puente.py (comando S), poses.py,
+                            manejo.py (las flechas del panel) y robot.toml para agmen run
 pruebas/arnes_firmware/     corre los dos firmwares en la compu para probarlos sin las placas
+pruebas/puente_agmen/       pruebas del puente sin el perro: ESP32 falsa, agmen run y el arnés
 impresiones/                piezas para imprimir, cada una con su generador y sus STL
 datos/                      corridas reales, una carpeta por prueba
 docs/hardware.md            conexiones, circuito y protocolo
@@ -70,6 +74,16 @@ docs/bitacora/              una nota por prueba: objetivo, método, cálculos y 
 
 Para practicar sin el hardware: `python pc/eficiencia_servos.py --simulado`.
 
+### Con Agmen (panel web)
+
+Todo el perro con un solo comando, y el panel en el navegador para verlo y manejarlo
+([nota 06](docs/bitacora/06_puente_agmen.md)):
+
+```
+agmen run pc/agmen/robot_simulado.toml      # sin el perro
+agmen run pc/agmen/robot.toml               # con el perro (COM6), colgado y despacio la primera vez
+```
+
 ## Bitácora
 
 | # | Prueba | Fecha | Resultado |
@@ -79,6 +93,7 @@ Para practicar sin el hardware: `python pc/eficiencia_servos.py --simulado`.
 | [03](docs/bitacora/03_ruido_auxiliar.md) | Ruido de la ESP32 auxiliar, antes y después de su tierra | pospuesta | — |
 | [04](docs/bitacora/04_rampas.md) | Rampas: velocidad contra error, los 12 servos | 2 nov 2026 | Atraso de ~100 ms a todas las velocidades; error = velocidad × 0.1 s; sin saturación hasta 240 °/s |
 | [05](docs/bitacora/05_marcha_aire.md) | Marcha en el aire con la pata FL | 3 nov 2026 | Adelanto de 100 ms: error del pie de 1–2 cm a 0.5 cm a todas las velocidades; queda un error fijo de ~0.5 cm |
+| [06](docs/bitacora/06_puente_agmen.md) | Puente entre Arca9 y Agmen | 5 nov 2026 (simulación) | 50 Hz, `S` en ~11 ms; el panel le gana a `poses.py` sin saltos. Falta probarlo con el perro |
 
 ## Créditos
 

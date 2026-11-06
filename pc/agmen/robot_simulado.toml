@@ -1,0 +1,70 @@
+# robot_simulado.toml — Arca9 con Agmen, SIN EL PERRO: una ESP32 falsa (esp32_falsa.py) y las 4
+# patas copiadas de la FL. Es el mismo robot.toml, con --simulado en lugar de --port.
+#
+#   agmen run pc/agmen/robot_simulado.toml
+#
+# Agmen todavía no tiene variables en robot.toml, por eso son dos archivos
+# (pc/agmen/PENDIENTES_AGMEN.md). Si cambias uno, cambia el otro.
+
+[robot]
+name = "Arca9 (simulado)"
+
+[[node]]
+name = "puente"
+cmd = "python puente.py --simulado --vel-max 60"
+
+[[node]]
+name = "poses"
+cmd = "python poses.py --simulado --secuencia parado sentado parado echado --espera 3 --vel 30"
+
+[[node]]
+name = "manejo"
+cmd = "python manejo.py --simulado"
+
+[[mux]]
+name = "mando"
+output = "/arca9/comando"
+hold_ms = 300
+
+[[mux.input]]
+name = "panel"
+topic = "/arca9/comando/panel"
+priority = 10
+
+[[mux.input]]
+name = "poses"
+topic = "/arca9/comando/poses"
+priority = 1
+
+[[topic]]
+name = "/arca9/articulaciones"
+type = "Arca9Articulaciones"
+required = true
+
+[[topic]]
+name = "/arca9/estado"
+type = "Arca9Estado"
+required = true
+
+[[topic]]
+name = "/arca9/comando"
+type = "Arca9Comando"
+
+[[topic]]
+name = "/arca9/comando/panel"
+type = "Arca9Comando"
+
+[[topic]]
+name = "/arca9/comando/poses"
+type = "Arca9Comando"
+
+[[topic]]
+name = "/arca9/teleop"
+type = "MotorCommand"
+
+[web]
+http = "127.0.0.1:8080"
+
+[web.teleop]
+target = "/arca9/teleop"
+max_speed = 1.0
