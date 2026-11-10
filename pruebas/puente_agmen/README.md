@@ -13,15 +13,19 @@ Prueban `pc/agmen/` (el puente entre Arca9 y Agmen) sin el perro, en cuatro part
    - las respuestas que no llegan, que llegan tarde o que llegan dañadas;
    - un firmware sin `PROTO=3`;
    - y que al cerrar mande `D`.
-2. **Las patas y las poses**: archivos de patas mal hechos (canales equivocados, una pata que gira
-   al revés), que las tres poses queden a 5° o más de los límites, y que la interpolación de
-   `poses.py` no pase de `--vel` y empiece y termine sin velocidad.
+2. **Las patas y las poses**: las 4 patas medidas con sus signos (nota 07), archivos de patas mal
+   hechos (canales equivocados, una pata que gira al revés sin sus signos, un signo que no es ±1),
+   que una pata en espejo con sus signos dé los grados en espejo, que las tres poses queden a 5° o
+   más de los límites, y que la interpolación de `poses.py` no pase de `--vel` y empiece y termine
+   sin velocidad.
 3. **El robot completo** con `agmen run pc/agmen/robot_simulado.toml` (procesos de verdad, hub, mux y
    panel):
    - `/arca9/articulaciones` a ~50 Hz;
    - el perro llega a "parado";
-   - las flechas del panel (`/api/teleop`) le ganan a `poses.py` y, al soltar, `poses.py` retoma
-     sin saltos;
+   - el botón *echado* de la tarjeta Poses (`/api/command`, Agmen 0.13) llega a `poses.py`, el perro
+     se echa sin saltos y se queda echado al soltar;
+   - otra entrada del mux le gana a `poses.py`: `/mux/mando` lo dice, `poses.py` cede y, al soltar,
+     retoma sin saltos;
    - el watchdog cuando se apaga `poses.py`;
    - `D` cuando se apaga el puente.
 4. **El firmware de verdad**: compila `pruebas/arnes_firmware` y lo corre con `--pty`. El puente se

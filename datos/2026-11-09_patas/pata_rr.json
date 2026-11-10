@@ -1,0 +1,54 @@
+{
+  "pata": "RR",
+  "fecha": "2026-11-09",
+  "metodo": "Medido por Adán con el perro armado (SpotMicro KDY0523), en el soporte, los servos sueltos y pc/ver_servos.py. Ángulos en grados reales del servo (tabla de la prueba 01 + factor de la prueba 02).",
+  "canales": {
+    "abd": 9,
+    "cad": 10,
+    "rod": 11
+  },
+  "medidas_cm": {
+    "muslo": 11.0,
+    "espinilla": 13.0,
+    "hombro": 5.5,
+    "nota": "Las mismas de la FL (las 4 patas son iguales). De eje a eje."
+  },
+  "limites_grados": {
+    "abd": [
+      35.0,
+      128.0
+    ],
+    "cad": [
+      -6.0,
+      175.0
+    ],
+    "rod": [
+      -6.0,
+      136.0
+    ],
+    "nota": "Medidos el 9 de noviembre con ver_servos.py, el perro armado. Abducción: Afuera (arriba): 29 el 8 nov y 35 hoy → 35. Adentro: 128, donde choca con la RL (sola llega a 163). Si dos medidas no coinciden, se usa la más estrecha. Un valor negativo o de 174–176 es el tope del propio servo (la placa nunca manda menos de 0° ni más de 174.6°)."
+  },
+  "pose_recta_grados": {
+    "abd": 94.1,
+    "cad": 76.3,
+    "rod": 0.5,
+    "nota": "Toda la pata recta, apuntando derecho hacia abajo, vista de frente vertical."
+  },
+  "pose_de_pie_grados": {
+    "abd": 94.2,
+    "cad": 51.9,
+    "rod": 89.2,
+    "nota": "Pata vertical vista de frente, pie más o menos debajo de la cadera, rodilla doblada hacia atrás. Copiada a ojo de la FL: solo sirve para revisar los signos (las poses salen de la cinemática)."
+  },
+  "signos": {
+    "abd": -1,
+    "cad": 1,
+    "rod": 1
+  },
+  "sentido": {
+    "abd": "al subir el ángulo, la pata se mete hacia el cuerpo",
+    "cad": "al subir el ángulo, la pata va hacia adelante",
+    "rod": "al subir el ángulo, la rodilla se dobla"
+  },
+  "rodilla": "el servo la mueve directo, sin varilla"
+}

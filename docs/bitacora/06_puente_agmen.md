@@ -10,6 +10,22 @@
 | Pruebas | [`pruebas/puente_agmen/`](../../pruebas/puente_agmen/): 66 revisiones, 0 fallas |
 | Resultado | **En simulación, el panel de Agmen ve los 12 ángulos a 50 Hz y maneja al perro.** Cada `S` de ida y vuelta tarda ~11 ms. El panel le gana a `poses.py` y lo suelta sin saltos (0.7° como máximo entre dos comandos seguidos) |
 
+> **Actualización del 9 de noviembre (Agmen 0.13.0 y las 4 patas, nota 07).** Agmen resolvió los
+> puntos 1, 2, 4 y 7 de `PENDIENTES_AGMEN.md`, así que:
+> - `manejo.py` y la tarjeta Manejar del panel (las flechas) **ya no existen**. En su lugar, la
+>   tarjeta **Poses** del panel (`[[web.command]]` en `robot.toml`) tiene los botones *parado*,
+>   *sentado* y *echado*. Mandan un `Arca9Pose` a `/arca9/pose`: `poses.py` va a esa pose con su
+>   interpolación suave y se queda ahí al soltar el botón. Los botones no llevan ángulos (no se
+>   copia ninguna calibración a `robot.toml`).
+> - `poses.py` sabe quién manda por `/mux/mando` (`MuxEstado`, Agmen 0.13). Ya no adivina con
+>   `--mando-mayor` ni copia el `hold_ms` del mux. La entrada `panel` del mux queda libre para lo
+>   que siga (deslizadores, marcha, política de aprendizaje por refuerzo).
+> - `/arca9/articulaciones` y `/arca9/estado` tienen `max_gap_ms`: si dejan de llegar, el panel y
+>   `agmen run` lo avisan.
+> - El perro de verdad tiene las 4 patas medidas, y `robot_simulado.toml` usa esas mismas 4.
+> - Pruebas: 74 revisiones, 0 fallas. Las secciones de abajo sobre `manejo.py` quedan como
+>   historia.
+
 ## Por qué
 
 Hasta la prueba 05, cada prueba era un script que hablaba solo con la ESP32. Para lo que sigue
@@ -25,11 +41,11 @@ manda los 12 pulsos y recibe las 12 lecturas.
 ## Cómo queda
 
 ```
-poses.py ──► /arca9/comando/poses ──────────────┐ prioridad 1
-                                                ├─► mux "mando" ──► /arca9/comando ──► puente.py ──S──► ESP32
-panel ──► /arca9/teleop ──► manejo.py ──► /arca9/comando/panel ─┘ prioridad 10        │
-                                                                                     ├──► /arca9/articulaciones
-                                                                                     └──► /arca9/estado
+panel (Poses) ──► /arca9/pose ──► poses.py ──► /arca9/comando/poses ─┐ prioridad 1
+                                                                     ├─► mux "mando" ──► /arca9/comando ──► puente.py ──S──► ESP32
+(libre)  ──────────────────────────────────► /arca9/comando/panel ─┘ prioridad 10        │
+                                                                                         ├──► /arca9/articulaciones
+                                     mux "mando" ──► /mux/mando (quién manda)            └──► /arca9/estado
 ```
 
 | Archivo | Qué hace |
@@ -37,7 +53,7 @@ panel ──► /arca9/teleop ──► manejo.py ──► /arca9/comando/panel
 | `arca9.agmen` | Los mensajes (abajo). `agmen gen pc/agmen/arca9.agmen` los muestra |
 | `puente.py` | El nodo que habla con la ESP32 por USB con `S`, a 50 Hz |
 | `poses.py` | Parado, sentado y echado, con interpolación suave. Es el "modo autónomo" |
-| `manejo.py` | Traduce las flechas del panel a un comando de los 12 servos |
+| ~~`manejo.py`~~ | Se borró el 9 de noviembre: lo reemplazan los botones Poses del panel (Agmen 0.13) |
 | `perro.py` | Las patas medidas (`pc/pata.py`), sus canales y límites, y pies ↔ servos. Lo usan los otros tres |
 | `esp32_falsa.py` | Se hace pasar por el puerto serie de la ESP32 (`--simulado` y las pruebas) |
 | `robot.toml` · `robot_simulado.toml` | Para `agmen run`: con el perro (COM6) y sin el perro |
@@ -50,7 +66,7 @@ panel ──► /arca9/teleop ──► manejo.py ──► /arca9/comando/panel
 | `Arca9Articulaciones` | `/arca9/articulaciones` (lo publica el puente, 50 Hz) | `f32[12] q`: grados reales de cada servo; NaN = sin lectura creíble |
 | `Arca9Comando` | `/arca9/comando` (lo sigue el puente) | `f32[12] q`: grados reales objetivo; `bool[12] activo`: false = ese servo no se toca |
 | `Arca9Estado` | `/arca9/estado` (lo publica el puente, 10 Hz) | `conectado`, `proto`, `reset`, `seg`, `aux`, `modo`, `reinicios`, `errores`, `ciclos`, `ciclo_ms`, `vel_max`, `limitado[12]`, `bloqueado[12]` |
-| `MotorCommand` | `/arca9/teleop` (lo manda el panel) | `left`, `right`: el tipo de la sección Manejar del panel |
+| `Arca9Pose` | `/arca9/pose` (lo mandan los botones del panel) | `u8 pose`: `PARADO` (0), `SENTADO` (1) o `ECHADO` (2) |
 
 Todos los ángulos van en **grados reales** (`pc/escala.py`: tabla de la prueba 01 y factor de la
 prueba 02). Los canales son los de `docs/hardware.md`: FL 0–2, FR 3–5, RL 6–8, RR 9–11.
@@ -114,7 +130,7 @@ Empieza desde donde está el perro (espera la primera lectura de `/arca9/articul
 panel toma el mando, publica lo mismo que el panel; medio segundo después de que el panel se calla,
 interpola desde ahí. Así no hay salto cuando el mux le regresa el mando.
 
-## Manejar desde el panel
+## Manejar desde el panel (hasta el 9 de noviembre)
 
 El panel de Agmen solo sabe mandar `MotorCommand{left, right}`, el comando de un robot de ruedas
 (`PENDIENTES_AGMEN.md` #1). `manejo.py` lo traduce:
@@ -252,9 +268,7 @@ donde quedó a lo que pide `poses` a la velocidad del puente, sin la interpolaci
 
 - [ ] Primera prueba con el perro (colgado, FL, `--vel-max 20`) y anotar sus números aquí.
 - [ ] ¿Cabe el `S` en 20 ms con el USB de Windows? Si no, `--hz 40`.
-- [ ] Medir FR, RL y RR como la FL (`datos/AAAA-MM-DD_pata_xx/pata_xx.json`). Revisar el sentido de
-      los servos de las patas derechas: `pata.py` supone el de la FL en las 3 articulaciones, y
-      `perro.py` no deja pasar una pata que gire al revés.
+- [x] Medir FR, RL y RR como la FL, con el sentido de cada servo (nota 07, `datos/2026-11-09_patas`).
 - [ ] Con las 4 patas: las poses en el suelo (con carga), empezando por echado → parado.
 - [ ] (Opcional) Limitar también la aceleración en el puente.
 - [ ] (Opcional) El adelanto de 100 ms de la prueba 05, cuando haya marcha.

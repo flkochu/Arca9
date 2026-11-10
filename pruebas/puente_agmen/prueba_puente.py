@@ -7,11 +7,12 @@ Cuatro partes:
   1. La lógica del puente con la ESP32 falsa (pc/agmen/esp32_falsa.py) y un reloj que avanza a
      mano: límites, velocidad, arranque, watchdog, reinicios, respuestas que no llegan o llegan
      tarde o dañadas, y D al cerrar. Todo lo que sale por el "USB" se revisa línea por línea.
-  2. Las patas y las poses: archivos de patas mal hechos, poses dentro de los límites y la
-     interpolación de poses.py.
+  2. Las patas y las poses: las 4 patas medidas con sus signos, archivos de patas mal hechos,
+     poses dentro de los límites y la interpolación de poses.py.
   3. El robot completo con `agmen run pc/agmen/robot_simulado.toml` (procesos de verdad, hub, mux
-     y panel): 50 Hz, el perro llega a la pose, el panel le gana a poses.py sin saltos, watchdog
-     al apagar poses y D al apagar el puente.
+     y panel): 50 Hz, el perro llega a la pose, los botones "Poses" del panel, otra entrada del
+     mux le gana a poses.py sin saltos (MuxEstado), watchdog al apagar poses y D al apagar el
+     puente.
   4. Con el arnés del firmware (pruebas/arnes_firmware, solo Linux o macOS con g++): el puente
      habla por un pseudo-terminal con el esp32_principal.ino de verdad.
 
@@ -33,6 +34,7 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.error
 import urllib.request
 
 RAIZ = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -75,7 +77,7 @@ class Reloj:
         self.t += s
 
 
-def armar(perro=None, inicio=None, aux=True, vel_max=60.0):
+def armar(perro=None, inicio=None, aux=True, vel_max=60.0, diag=True):
     reloj = Reloj()
     perro = perro or Perro(simulado=True)
     if inicio is None:
@@ -83,7 +85,7 @@ def armar(perro=None, inicio=None, aux=True, vel_max=60.0):
         for p in perro.patas.values():
             for ch, g in zip(p.canales, p.de_pie_servo):
                 inicio[ch] = g
-    falsa = ESP32Falsa(esc, retro, inicio=inicio, reloj=reloj, latencia=False, aux=aux)
+    falsa = ESP32Falsa(esc, retro, inicio=inicio, reloj=reloj, latencia=False, aux=aux, diag=diag)
     esp = ESP32Puente(puerto_falso=falsa)
     logs = []
     p = Puente(esp, esc, retro, perro, vel_max=vel_max, reloj=reloj, log=logs.append)
@@ -184,7 +186,9 @@ def parte_logica():
     activos_tarde = [any(u != -1 for u in fila) for fila in s[5 + 26:]]
     revisa(p.modo == "QUIETO" and not any(activos_tarde), "watchdog: sin comandos en 0.5 s se queda quieto",
            f"modo {p.modo}")
-    revisa(any("watchdog" in l for l in logs), "watchdog: lo avisa en los logs")
+    revisa(any("watchdog" in l and "dejaron de llegar" in l for l in logs),
+           "watchdog: lo avisa en los logs, y dice que el puente no se trabó (dejaron de llegar)",
+           next((l for l in logs if "watchdog" in l), "")[-90:])
     ultimo = [fila for fila in s if fila[1] != -1][-1]
     n0 = len(falsa.recibidas)
     correr(p, reloj, 3, vuelta)
@@ -196,8 +200,8 @@ def parte_logica():
     p.cerrar()
     revisa(falsa.recibidas[-1] == "D" and any("(D)" in l for l in logs), "al cerrar manda D", falsa.recibidas[-1])
 
-    # Patas sin medir: no se mueven
-    solo_fl = Perro(simulado=False)
+    # Patas sin medir: no se mueven (un perro con solo la FL medida)
+    solo_fl = Perro(simulado=False, patas=("fl",))
     falsa, esp, p, reloj, logs = armar(solo_fl, inicio=[100.0] * N_SERVOS)
     correr(p, reloj, 20, ([100.0] * N_SERVOS, [True] * N_SERVOS))
     s = pulsos_s(falsa)
@@ -293,6 +297,56 @@ def parte_logica():
     revisa(p.errores == 1 and p.modo == "SUELTO", "una respuesta dañada cuenta como error y sigue",
            f"errores {p.errores}")
 
+    # Watchdog porque el proceso entero se congeló (la compu): lo distingue
+    falsa, esp, p, reloj, logs = armar(perro)
+    correr(p, reloj, 2)
+    cmd = (list(p.medido), [True] * N_SERVOS)
+    correr(p, reloj, 5, cmd)
+    reloj.avanzar(0.6)                         # ni ciclos ni comandos durante 0.6 s
+    correr(p, reloj, 1)
+    revisa(p.modo == "QUIETO" and any("watchdog" in l and "estuvo trabado" in l for l in logs),
+           "watchdog con el puente congelado: dice que el puente estuvo trabado",
+           next((l for l in logs if "watchdog" in l), "")[-90:])
+
+    # Diagnóstico (firmware del 9 nov, DIAG=1): dónde se fue el tiempo de un S lento
+    falsa, esp, p, reloj, logs = armar(perro)
+    correr(p, reloj, 2)
+    cmd = (list(p.medido), [True] * N_SERVOS)
+    correr(p, reloj, 120, cmd)                 # 2.4 s: dos '?'
+    inf = p.informe()
+    revisa(len(inf) == 2 and "ESP32: S peor 5.4 ms (I²C peor 4.5 ms)" in inf[1] and "I²C fallas 0" in inf[1]
+           and "S perdidos 0" in inf[1] and esp.mandados > 100,
+           "informe cada 10 s: tiempos de la compu y de la ESP32, sin S perdidos", inf[1].strip())
+    falsa.callar(2)                            # dos S que no le llegan
+    correr(p, reloj, 60, cmd)
+    inf = p.informe()
+    revisa(p.s_perdidos == 2 and any("2 S no le llegaron" in l for l in inf),
+           "S que no le llegan a la ESP32: los cuenta (NS contra los mandados) y lo dice", inf[-1].strip())
+    falsa.colgar_i2c(1, 0.08)                  # la ESP32 se traba 80 ms en el I²C (contesta tarde)
+    correr(p, reloj, 1, cmd)
+    reloj.avanzar(0.1)
+    correr(p, reloj, 60, cmd)
+    inf = p.informe()
+    revisa(p.i2c_fallas == 1 and "código 5" in inf[1] and "lo lento fue la ESP32" in inf[-1],
+           "una escritura de I²C que se cuelga: I²C fallas 1 (código 5) y 'lo lento fue la ESP32'", inf[-1].strip())
+    falsa.tardar(1, 0.3)                       # la respuesta tarda en el USB, la ESP32 contestó rápido
+    correr(p, reloj, 1, cmd)
+    reloj.avanzar(0.3)
+    correr(p, reloj, 60, cmd)
+    inf = p.informe()
+    revisa(p.s_perdidos == 2 and "lo lento fue la compu o el USB" in inf[-1],
+           "una respuesta que se tarda en el USB: 'la ESP32 contestó rápido... la compu o el USB'", inf[-1].strip())
+    ns_antes = falsa.ns
+    falsa.reiniciar("voltaje_bajo")
+    correr(p, reloj, 120)
+    revisa(p.s_perdidos == 0 and p.diag_base is not None and p.diag_base[0] < ns_antes,
+           "tras un reinicio de la ESP32 vuelve a contar desde cero (sin S perdidos falsos)",
+           f"perdidos {p.s_perdidos}, base {p.diag_base}")
+    falsa, esp, p, reloj, logs = armar(perro, diag=False)
+    correr(p, reloj, 60)
+    inf = p.informe()
+    revisa("sin diagnóstico" in inf[1], "con un firmware sin DIAG lo dice (y lo demás funciona igual)", inf[1].strip())
+
     # Firmware viejo
     f2 = ESP32Falsa(esc, retro, latencia=False)
     f2.proto = 2
@@ -318,11 +372,19 @@ def parte_logica():
 def parte_poses():
     seccion("2. patas y poses")
     real = Perro(simulado=False)
-    sim = Perro(simulado=True)
-    revisa(list(real.patas) == ["fl"] and real.faltan() == ["fr", "rl", "rr"],
-           "con el perro: solo la FL está medida (datos/2026-11-03_pata_fl)", str(list(real.patas)))
+    sim = Perro(simulado=True, patas=("fl",))
+    revisa(list(real.patas) == list(PATAS) and not real.faltan() and not real.simuladas
+           and real.canales() == list(range(12)),
+           "con el perro: las 4 patas medidas", ", ".join(p.fuente for p in real.patas.values()))
+    signos = {n: tuple(int(p.signo[a]) for a in ("abd", "cad", "rod")) for n, p in real.patas.items()}
+    revisa(signos == {"fl": (-1, -1, -1), "fr": (1, 1, 1), "rl": (1, -1, -1), "rr": (-1, 1, 1)},
+           "signos: la derecha es espejo de la izquierda y la abducción de atrás va al revés", str(signos))
+    pies = {n: p.fk(*p.de_pie_q[1:]) for n, p in real.patas.items()}
+    revisa(all(z > 10 and -3 < x < 10 for x, z in pies.values()),
+           "con sus signos, la pose de pie medida de cada pata queda debajo del cuerpo",
+           " ".join(f"{n.upper()} ({x:+.1f}, {z:.1f})" for n, (x, z) in pies.items()))
     revisa(list(sim.patas) == list(PATAS) and sim.simuladas == ["fr", "rl", "rr"] and sim.canales() == list(range(12)),
-           "simulado: las 4 patas (FR, RL y RR copiadas de la FL)")
+           "simulado con solo la FL: FR, RL y RR copiadas de la FL")
 
     with tempfile.TemporaryDirectory() as d:
         base = json.load(open(real.patas["fl"].fuente if os.path.isabs(real.patas["fl"].fuente)
@@ -343,25 +405,44 @@ def parte_poses():
                                        for a, v in base["limites_grados"].items()})
         json.dump(alreves, open(ruta, "w", encoding="utf-8"))
         try:
-            Perro(rutas={"fr": ruta})
-            revisa(False, "una pata que gira al revés da error (pata.py supone el sentido de la FL)")
+            Perro(rutas={"fr": ruta}, patas=("fl", "fr"))
+            revisa(False, "una pata que gira al revés sin sus signos da error")
         except ErrorPerro as e:
-            revisa("al revés" in str(e), "una pata que gira al revés da error (pata.py supone el sentido de la FL)",
+            revisa("al revés" in str(e) and "signos" in str(e), "una pata que gira al revés sin sus signos da error",
                    str(e)[:90])
+        signo_fl = base.get("signos", {"abd": -1, "cad": -1, "rod": -1})
+        con_signos = dict(alreves, signos={a: -v for a, v in signo_fl.items()})
+        json.dump(con_signos, open(ruta, "w", encoding="utf-8"))
+        p_esp = Perro(rutas={"fr": ruta}, patas=("fl", "fr"))
+        fl, fr = p_esp.patas["fl"], p_esp.patas["fr"]
+        th_fl = fl.servo(0.0, *fl.ik(2.0, 18.5))
+        th_fr = fr.servo(0.0, *fr.ik(2.0, 18.5))
+        revisa(max(abs(a + b - 180.0) for a, b in zip(th_fl, th_fr)) < 1e-6,
+               "con sus signos, la misma pata en espejo da los grados en espejo (180 − x)",
+               f"FL {[round(x, 1) for x in th_fl]} · FR {[round(x, 1) for x in th_fr]}")
+        malos = dict(con_signos, signos={"abd": 1, "cad": 2, "rod": 1})
+        json.dump(malos, open(ruta, "w", encoding="utf-8"))
+        try:
+            Perro(rutas={"fr": ruta}, patas=("fl", "fr"))
+            revisa(False, "un signo que no es 1 o -1 da error")
+        except (ErrorPerro, ErrorPata) as e:
+            revisa("signos.cad" in str(e), "un signo que no es 1 o -1 da error", str(e)[:90])
         bien = dict(base, pata="FR", canales={"abd": 3, "cad": 4, "rod": 5})
         json.dump(bien, open(ruta, "w", encoding="utf-8"))
-        p2 = Perro(rutas={"fr": ruta})
+        p2 = Perro(rutas={"fr": ruta}, patas=("fl", "fr"))
         revisa(list(p2.patas) == ["fl", "fr"] and 4 in p2.lim, "una pata FR medida se agrega con sus canales")
 
     for nombre in poses.POSES:
-        for perro, que in ((real, "FL"), (sim, "las 4")):
+        for perro, que in ((real, "las 4 medidas"), (sim, "copias de la FL")):
             q, act = poses.comando_de_pose(perro, nombre)
             margen = min(min(q[ch] - perro.lim[ch][0], perro.lim[ch][1] - q[ch]) for ch in perro.canales())
             revisa(margen >= 5.0 and sum(act) == len(perro.canales()),
                    f"pose '{nombre}' ({que}): dentro de los límites, a {margen:.1f}° o más")
-    q_sent, _ = poses.comando_de_pose(sim, "sentado")
-    revisa(q_sent[7] - q_sent[1] > 5 and q_sent[2] - q_sent[8] > 30, "sentado: traseras dobladas, delanteras de pie",
-           f"cadera FL {q_sent[1]:.0f}° / RL {q_sent[7]:.0f}°, rodilla FL {q_sent[2]:.0f}° / RL {q_sent[8]:.0f}°")
+    q_sent, _ = poses.comando_de_pose(real, "sentado")
+    art = {n: p.q([q_sent[ch] for ch in p.canales]) for n, p in real.patas.items()}   # (q_abd, q_cad, q_rod)
+    revisa(min(art["rl"][2], art["rr"][2]) - max(art["fl"][2], art["fr"][2]) > 30,
+           "sentado: traseras dobladas, delanteras de pie (en ángulos de articulación, las 4 patas)",
+           " ".join(f"{n.upper()} rodilla {q[2]:.0f}°" for n, q in art.items()))
 
     q0, act = poses.comando_de_pose(sim, "parado")
     q1, _ = poses.comando_de_pose(sim, "echado")
@@ -486,8 +567,8 @@ def parte_robot():
     robot = Robot()
     q_esc = e_esc = c_esc = None
     try:
-        nodos_ok = esperar(lambda: _nodos(robot) == {"hub", "mando", "puente", "poses", "manejo"}, 20)
-        revisa(nodos_ok, "arrancan los 5 nodos (hub, mux 'mando', puente, poses y manejo)", str(_nodos(robot)))
+        nodos_ok = esperar(lambda: _nodos(robot) == {"hub", "mando", "puente", "poses"}, 20)
+        revisa(nodos_ok, "arrancan los 4 nodos (hub, mux 'mando', puente y poses)", str(_nodos(robot)))
         q_esc = Escucha(msgs.Arca9Articulaciones, "/arca9/articulaciones")
         e_esc = Escucha(msgs.Arca9Estado, "/arca9/estado")
         c_esc = Escucha(msgs.Arca9Comando, "/arca9/comando")
@@ -505,28 +586,60 @@ def parte_robot():
         dif = max(abs(a - b) for a, b in zip(q_esc.ultimo().q, parado)) if q_esc.ultimo() else math.nan
         revisa(cerca, "el perro llega a 'parado' (medido a menos de 3°)", f"{dif:.1f}°")
 
-        # El panel le gana a poses.py
         def z_media(q):
             pies, _ = sim.pies_de_servos(q)
             return sum(z for _, z in pies.values()) / len(pies)
+
+        # Los botones "Poses" del panel ([[web.command]], Agmen 0.13): echado, y se queda echado
         t_antes = time.monotonic()
         z0 = z_media(c_esc.ultimo().q)
-        for _ in range(30):                        # ↓ al 60 %, 1.5 s
-            robot.api("/api/teleop", {"left": -0.6, "right": -0.6})
+        for _ in range(10):                        # medio segundo apretado
+            robot.api("/api/command", {"command": "Poses", "button": "echado"})
             time.sleep(0.05)
-        t_suelta = time.monotonic()
+        pidio = esperar(lambda: "el panel pidió 'echado'" in robot.log(), 2)
+        revisa(pidio, "el botón 'echado' del panel le llega a poses.py (/arca9/pose)")
+        echado, _ = poses.comando_de_pose(sim, "echado")
+        llego = esperar(lambda: q_esc.ultimo() and max(abs(a - b) for a, b in zip(q_esc.ultimo().q, echado)) < 3, 12)
         z1 = z_media(c_esc.ultimo().q)
-        robot.api("/api/teleop", {"left": 0.0, "right": 0.0})
-        time.sleep(0.25)
-        z_quieto = z_media(c_esc.ultimo().q)
-        revisa(z0 - z1 > 2.0 and "manda 'panel'" in robot.log(),
-               "con las flechas del panel el cuerpo baja (el panel le gana a poses.py)",
+        revisa(llego and z0 - z1 > 4.0, "el perro se echa y se queda echado al soltar el botón",
                f"z de los pies {z0:.1f} → {z1:.1f} cm")
-        revisa(abs(z_quieto - z1) < 0.2, "al soltar se queda donde va", f"{z_quieto:.1f} cm")
-        regreso = esperar(lambda: robot.log().count("manda 'poses'") >= 2
-                          and "el panel soltó el mando: retomo desde ahí" in robot.log(), 3)
-        revisa(regreso,
-               "al soltar, el mux le regresa el mando a poses.py y poses.py retoma desde ahí")
+        cmds = [m.q for m in c_esc.entre(t_antes, time.monotonic())]
+        salto = max(max(abs(a - b) for a, b in zip(x, y)) for x, y in zip(cmds, cmds[1:]))
+        revisa(salto < 3.5, "sin saltos en /arca9/comando con el botón (poses.py interpola)",
+               f"mayor cambio entre dos comandos seguidos: {salto:.2f}°")
+        try:
+            robot.api("/api/command", {"command": "Poses", "fields": {"pose": 7}})
+            revisa(False, "el panel no deja mandar una pose que no es un botón")
+        except urllib.error.HTTPError as e:
+            revisa(e.code in (400, 403, 422), "el panel no deja mandar una pose que no es un botón",
+                   e.read().decode()[:80])
+
+        # Otra entrada del mux le gana a poses.py; poses.py lo sabe por /mux/mando (MuxEstado)
+        from agmen.msgs import MuxEstado
+        m_esc = Escucha(MuxEstado, "/mux/mando")
+        nodo = agmen.Node("prueba_panel")
+        pub = nodo.publisher(msgs.Arca9Comando, "/arca9/comando/panel")
+        try:
+            t_antes = time.monotonic()
+            q_ini = list(c_esc.ultimo().q)
+            parado, act = poses.comando_de_pose(sim, "parado")
+            for k in range(60):                    # 1.2 s, de echado hacia parado, poco a poco
+                u = (k + 1) / 60 * 0.5
+                pub.publish(msgs.Arca9Comando(q=[a + (b - a) * u for a, b in zip(q_ini, parado)], activo=act))
+                time.sleep(0.02)
+            m = m_esc.ultimo()
+            revisa(m is not None and m.entrada == "panel" and m.antes == "poses",
+                   "/mux/mando dice que manda 'panel' (antes 'poses')", repr(m)[:100] if m else "no llegó")
+            revisa("'panel' tomó el mando" in robot.log(), "poses.py lo sabe por /mux/mando y cede")
+        finally:
+            pub.close() if hasattr(pub, "close") else None
+            nodo.close()
+        regreso = esperar(lambda: "me regresaron el mando: retomo desde ahí" in robot.log(), 3)
+        m = m_esc.ultimo()
+        revisa(regreso and m is not None and m.entrada == "poses" and m.callada,
+               "al callarse, el mux le regresa el mando a poses.py y poses.py retoma desde ahí",
+               repr(m)[:100] if m else "")
+        m_esc.parar()
         time.sleep(1.5)
         cmds = [m.q for m in c_esc.entre(t_antes, time.monotonic())]
         salto = max(max(abs(a - b) for a, b in zip(x, y)) for x, y in zip(cmds, cmds[1:]))
@@ -602,6 +715,9 @@ def parte_arnes():
             revisa(dif < 6.0, "las lecturas de la FL llegan a la pose (el arnés no tiene el atraso del servo)",
                    " ".join(f"{p.medido[ch]:.1f}/{q[ch]:.1f}" for ch in (0, 1, 2)))
             revisa(all(math.isfinite(g) for g in p.medido), "llegan las 12 lecturas (FL y la auxiliar)")
+            inf = p.informe()
+            revisa(len(inf) >= 2 and "S perdidos 0" in inf[1] and "I²C fallas 0" in inf[1],
+                   "el firmware manda su diagnóstico en '?' y el puente lo junta (sin S perdidos)", inf[1].strip())
             esp.comando("D", "OK D", 1.0)
             revisa(True, "el firmware contesta OK D")
             esp.cerrar()

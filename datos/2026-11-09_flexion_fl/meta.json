@@ -1,0 +1,67 @@
+{
+  "fecha": "20261109_182700",
+  "prueba": "08_flexion",
+  "pata": "FL",
+  "pata_json": "datos/2026-11-09_patas/pata_fl.json",
+  "canal": 2,
+  "cadera_q": 0.0,
+  "ext_q": 5.0,
+  "flex_q": 125.8,
+  "us_ext": 2031,
+  "us_flex": 745,
+  "pose_inicio_us": [
+    1407,
+    1460,
+    2031
+  ],
+  "velocidades": [
+    [
+      "60",
+      60.0,
+      639
+    ],
+    [
+      "120",
+      120.0,
+      1278
+    ],
+    [
+      "180",
+      180.0,
+      1917
+    ],
+    [
+      "240",
+      240.0,
+      2556
+    ],
+    [
+      "max",
+      375.588,
+      4000
+    ]
+  ],
+  "vueltas": 2,
+  "espera_ms": 600,
+  "margen": 3.0,
+  "voltaje": 6.0,
+  "simulado": false,
+  "esp32": {
+    "linea": "OK1-RETRO listo PCA=ok FB=12 AUX=ok DESC=0 PROTO=3 RESET=encendido SEG=894 DIAG=1 NS=0 SMAX=0 LINMAX=22 VUELTAMAX=12468 I2CERR=0 I2CCOD=0 I2CMAX=0",
+    "pca": "ok",
+    "fb": 12,
+    "aux": "ok",
+    "desc": 0,
+    "proto": 3,
+    "reset": "encendido",
+    "seg": 894
+  },
+  "escala": "datos/2026-11-02_angulo_real/escala.json",
+  "us_por_grado_real": 10.64997,
+  "calibracion": "datos/2026-10-29_eficiencia_12_servos/calibracion_servos.json",
+  "inicio_grados": [
+    86.70548,
+    90.63263,
+    144.93486
+  ]
+}

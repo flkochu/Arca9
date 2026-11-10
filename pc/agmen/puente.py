@@ -27,6 +27,10 @@ Seguridad (S no hace rampas: quien lo usa tiene que mandar cambios chicos):
     puente (↻ en el panel).
   - Al cerrar (Ctrl+C, ■ en el panel o agmen run que termina) manda D: suelta los servos.
 
+Cada 10 s imprime los Hz y cuánto tarda S, y después dónde se fue el tiempo de los S lentos: lo que
+tardó la compu en mandar y en esperar, y lo que contó la ESP32 en su '?' (DIAG=1, firmware del 9 nov:
+su S más lento, el I²C, las líneas, los S que no le llegaron). Ver la nota 07.
+
 Uso (en la carpeta de este archivo; normalmente lo lanza `agmen run robot.toml`):
     python puente.py --port COM6                  # con el perro
     python puente.py --port COM6 --vel-max 20     # primera prueba: despacio
@@ -70,11 +74,14 @@ class SinRespuesta(ErrorESP32):
     pass
 
 
+CAMPOS_DIAG = ("DIAG", "NS", "SMAX", "LINMAX", "VUELTAMAX", "I2CERR", "I2CCOD", "I2CMAX")   # firmware del 9 nov
+
+
 def leer_info(l):
-    """Los campos de una línea OK1-RETRO, como ESP32.estado()."""
+    """Los campos de una línea OK1-RETRO, como ESP32.estado(), más los de diagnóstico (DIAG=1)."""
     info = {"linea": l}
-    for k in ("PCA", "FB", "AUX", "DESC", "PROTO", "RESET", "SEG"):
-        m = re.search(k + r"=(\w+)", l)
+    for k in ("PCA", "FB", "AUX", "DESC", "PROTO", "RESET", "SEG") + CAMPOS_DIAG:
+        m = re.search(r"\b" + k + r"=(\w+)", l)
         if m:
             info[k.lower()] = int(m.group(1)) if m.group(1).isdigit() else m.group(1)
     return info
@@ -97,6 +104,10 @@ class ESP32Puente(ESP32):
         self.estados_pendientes = 0             # '?' que no contestaron a tiempo (su respuesta puede llegar después)
         self.tardias = 0                        # respuestas que llegaron tarde y se tiraron
         self.danadas = 0
+        self.mandados = 0                       # S mandados (se comparan con NS de la ESP32)
+        self.peor_mandar_ms = 0.0               # lo peor desde el último informe (Puente.informe)
+        self.peor_esperar_ms = 0.0
+        self.peor_consulta_ms = 0.0
 
     def _arranque(self, l, como):
         """Llegó una línea OK1-RETRO sin pedirla: o es la respuesta tardía de un '?' o la ESP32 arrancó."""
@@ -125,8 +136,17 @@ class ESP32Puente(ESP32):
     def ciclo(self, us, timeout=TIMEOUT_S):
         """S us0 ... us11 -> 12 lecturas en mV (None = sin lectura)."""
         self._pendientes()
+        t0 = time.perf_counter()
         self.s.write(("S " + " ".join(str(int(u)) for u in us) + "\n").encode())
-        limite = time.time() + timeout
+        self.mandados += 1
+        t1 = time.perf_counter()
+        self.peor_mandar_ms = max(self.peor_mandar_ms, (t1 - t0) * 1000)
+        try:
+            return self._respuesta_s(time.time() + timeout)
+        finally:
+            self.peor_esperar_ms = max(self.peor_esperar_ms, (time.perf_counter() - t1) * 1000)
+
+    def _respuesta_s(self, limite):
         while True:
             l = self._linea(limite)
             if l is None:
@@ -151,8 +171,15 @@ class ESP32Puente(ESP32):
     def consultar(self, timeout=0.15):
         """'?' rápido. Regresa la info, o None si no contestó. Reinicio si SEG regresó."""
         self._pendientes()
+        t0 = time.perf_counter()
+        try:
+            return self._respuesta_estado(time.time() + timeout)
+        finally:
+            self.peor_consulta_ms = max(self.peor_consulta_ms, (time.perf_counter() - t0) * 1000)
+
+    def _respuesta_estado(self, limite):
         self.s.write(b"?\n")
-        limite = time.time() + timeout
+        mandados = self.mandados                # los S que la ESP32 ya debió atender al contestar
         while True:
             l = self._linea(limite)
             if l is None:
@@ -160,6 +187,7 @@ class ESP32Puente(ESP32):
                 return None
             if l.startswith("OK1-RETRO"):
                 info = leer_info(l)
+                info["mandados"] = mandados
                 seg = info.get("seg", 0)
                 if seg < self.ultimo_seg:
                     self.ultimo_seg = seg
@@ -198,6 +226,11 @@ class Puente:
         self.ciclo_ms = 0.0
         self.peor_ms = 0.0
         self.avisados = set()
+        self.diag = {}                           # lo peor que contó la ESP32 desde el último informe (µs)
+        self.diag_base = None                    # (NS, S mandados, I2CERR) del primer '?' con DIAG
+        self.s_perdidos = self.i2c_fallas = 0    # desde ese primer '?'
+        self.i2c_codigo = 0
+        self.perdidos_antes = 0                  # s_perdidos en el informe anterior
 
     # ---- entradas
     def comando(self, q, activo):
@@ -221,7 +254,8 @@ class Puente:
     def pulsos(self):
         """Los 12 pulsos del ciclo (-1 = no cambiar). Actualiza modo, limitado y bloqueado."""
         ahora = self.reloj()
-        dt = self.periodo if self.t_ciclo is None else min(max(ahora - self.t_ciclo, 0.0), 2 * self.periodo)
+        hueco = None if self.t_ciclo is None else max(ahora - self.t_ciclo, 0.0)
+        dt = self.periodo if hueco is None else min(hueco, 2 * self.periodo)
         self.t_ciclo = ahora
         us = [-1] * N_SERVOS
         self.limitado = [False] * N_SERVOS
@@ -231,8 +265,12 @@ class Puente:
             self._cambiar_modo("SUELTO")
             return us
         if ahora - self.t_cmd > self.watchdog_s:
+            por_que = ("el puente estuvo trabado" if hueco is not None and hueco > self.watchdog_s / 2 else
+                       "el puente no estuvo trabado: dejaron de llegar")
             self._cambiar_modo("QUIETO", f"⛔ watchdog: sin comandos desde hace {self.watchdog_s:g} s → quieto "
-                                         "(los servos se quedan donde van)")
+                                         f"(los servos se quedan donde van). Último comando hace "
+                                         f"{(ahora - self.t_cmd) * 1000:.0f} ms; ciclo anterior hace "
+                                         f"{(hueco or 0) * 1000:.0f} ms ({por_que})")
             return us
         self._cambiar_modo("SIGUIENDO", "▶ siguiendo /arca9/comando" if self.modo != "SUELTO" else
                            f"▶ primer comando: los servos se prenden uno por ciclo desde donde están "
@@ -322,10 +360,61 @@ class Puente:
             self.errores += 1
         else:
             self.info.update(info)
+            self._juntar_diag(info)
             if info.get("aux") != "ok":
                 self._avisar_una_vez("aux", "la auxiliar no manda datos (AUX=NO): sin lecturas de FR, RL y RR")
 
+    def _juntar_diag(self, info):
+        """Lo que trae un '?' del firmware con DIAG=1 (los MAX son desde el '?' anterior)."""
+        if info.get("diag") is None or not all(isinstance(info.get(k.lower()), int) for k in CAMPOS_DIAG):
+            return
+        for k in ("smax", "linmax", "vueltamax", "i2cmax"):
+            self.diag[k] = max(self.diag.get(k, 0), info[k])
+        if self.diag_base is None:
+            self.diag_base = (info["ns"], info["mandados"], info["i2cerr"])
+            return
+        ns0, mandados0, err0 = self.diag_base
+        self.s_perdidos = (info["mandados"] - mandados0) - (info["ns"] - ns0)
+        self.i2c_fallas = info["i2cerr"] - err0
+        self.i2c_codigo = info["i2ccod"]
+
+    def informe(self):
+        """Las líneas que van después de la de Hz (cada 10 s): dónde se fue el tiempo de los S lentos.
+        Reinicia lo peor de la compu y de la ESP32."""
+        e, d = self.esp, self.diag
+        lineas = [f"   compu: mandar S peor {e.peor_mandar_ms:.1f} ms · esperar su respuesta peor "
+                  f"{e.peor_esperar_ms:.1f} ms · '?' peor {e.peor_consulta_ms:.1f} ms"]
+        if not d:
+            lineas.append("   ESP32: sin diagnóstico (su '?' no trae DIAG): carga el esp32_principal.ino del 9 nov "
+                          "para ver sus tiempos")
+        else:
+            cod = f" (la última con código {self.i2c_codigo})" if self.i2c_fallas else ""
+            lineas.append(f"   ESP32: S peor {d['smax'] / 1000:.1f} ms (I²C peor {d['i2cmax'] / 1000:.1f} ms) · "
+                          f"línea peor {d['linmax'] / 1000:.1f} ms · vuelta peor {d['vueltamax'] / 1000:.1f} ms · "
+                          f"I²C fallas {self.i2c_fallas}{cod} · S perdidos {self.s_perdidos}")
+            lento = max(e.peor_mandar_ms, e.peor_esperar_ms)
+            nuevos = self.s_perdidos - self.perdidos_antes
+            if lento >= 50:
+                esp32 = (d["smax"] + d["vueltamax"]) / 1000
+                if esp32 >= lento / 2:
+                    lineas.append(f"   → lo lento fue la ESP32 ({esp32:.0f} ms de {lento:.0f} ms)")
+                elif nuevos > 0:
+                    lineas.append(f"   → {nuevos} S no le llegaron a la ESP32 (o le llegaron dañados): se perdieron "
+                                  "en el USB")
+                elif d["linmax"] / 1000 >= lento / 2:
+                    lineas.append(f"   → la ESP32 contestó rápido; una línea tardó {d['linmax'] / 1000:.0f} ms en "
+                                  "llegarle: lo lento fue el USB de ida")
+                else:
+                    lineas.append(f"   → la ESP32 contestó rápido (lo peor suyo: {esp32:.0f} ms de {lento:.0f} ms): "
+                                  "lo lento fue la compu o el USB")
+        e.peor_mandar_ms = e.peor_esperar_ms = e.peor_consulta_ms = 0.0
+        self.diag = {}
+        self.perdidos_antes = self.s_perdidos
+        return lineas
+
     def _reinicio(self, r):
+        self.diag_base = None                    # la ESP32 empieza a contar desde cero
+        self.s_perdidos = self.i2c_fallas = self.perdidos_antes = 0
         self.reinicios += 1
         self.info.update(r.info)
         self.actual = [None] * N_SERVOS
@@ -457,6 +546,8 @@ def main():
             hz = (puente.ciclos - cuenta["ciclos"]) / (t - cuenta["t"])
             log(f"{hz:.1f} Hz · S tarda {puente.ciclo_ms:.1f} ms (peor {puente.peor_ms:.1f}) · modo {puente.modo} · "
                 f"errores {puente.errores} · reinicios {puente.reinicios}")
+            for linea in puente.informe():
+                log(linea)
             cuenta["t"], cuenta["ciclos"] = t, puente.ciclos
             puente.peor_ms = 0.0
 

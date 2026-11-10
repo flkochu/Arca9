@@ -163,7 +163,7 @@ class ESP32Simulado:
         return {"media_mv": float(np.mean(x)), "sigma_mv": float(np.std(x)), "min_mv": min(x),
                 "max_mv": max(x), "n": n}
 
-    def rampa(self, ch, us_a, us_b, vel, vueltas, espera_ms):
+    def rampa(self, ch, us_a, us_b, vel, vueltas, espera_ms, tolerancia=0.0):
         if self.us[ch] != us_a:
             raise ErrorESP32(f"la ESP32 contestó: E G: primero manda P {ch} {us_a}")
         dur = abs(us_b - us_a) * 1e6 / vel
@@ -213,6 +213,7 @@ class ESP32Simulado:
 
     def soltar(self):
         self.us = {ch: 0 for ch in range(N_SERVOS)}
+        return True
 
     def esperar(self, s):
         pass

@@ -69,6 +69,29 @@
                            cualquier cosa que llegue por USB la detiene y los servos se quedan donde
                            iban. Grabando caben ~16 s con 3 canales y ~5.7 s con los 12.
 
+  Cómo se escriben los pulsos (9 nov 2026; el protocolo no cambia):
+    Antes cada pulso usaba writeMicroseconds() de Adafruit, que en CADA llamada vuelve a leer el
+    registro PRESCALE del PCA9685 por I²C y luego escribe el pulso: 2 transacciones por servo. Con
+    12 servos un S tardaba 42 ms en vez de 11 (nota 07). Ahora el PRESCALE se lee una sola vez al
+    arrancar y los ticks se calculan con la misma cuenta de Adafruit (salen exactamente los mismos
+    pulsos). S y T escriben todos los canales que cambiaron en UNA transacción (el PCA9685 avanza
+    solo de registro en registro y aplica los cambios juntos al terminar), y un canal que no cambió
+    no se vuelve a escribir. Si una escritura de I²C falla, esos canales se reescriben en el
+    siguiente S o punto de T.
+
+  Diagnóstico en '?' (9 nov 2026, DIAG=1; PROTO sigue en 3 porque ningún comando cambia):
+    Al final de la línea de '?' van campos nuevos. Quien no los conoce los ignora (todos los
+    scripts buscan sus campos por nombre). Sirven para saber si un S lento se tardó AQUÍ o en la
+    compu/USB. Los "MAX" son lo peor desde el '?' anterior (se reinician al contestar):
+      NS=n          S que entendió desde que arrancó (la compu los compara con los que mandó)
+      SMAX=us       el S más lento: de tener la línea completa a terminar de contestar
+      LINMAX=us     la línea más lenta en llegar completa (del primer carácter al fin de línea)
+      VUELTAMAX=us  la vuelta de loop() más larga sin contar los comandos (¿algo más la frena?)
+      I2CERR=n      escrituras de I²C al PCA9685 que fallaron desde que arrancó
+      I2CCOD=c      el código de Wire de la última falla (2 o 3: el PCA9685 no contestó; 5: se
+                    acabó el tiempo; 4: otra falla; 0: ninguna)
+      I2CMAX=us     la escritura de I²C más lenta
+
   Los mV son los del pin, después del divisor. La compu los pasa a grados al calibrar, así que
   no importa qué divisor uses mientras el pin quede entre ~0.15 y ~2.45 V.
 
@@ -82,6 +105,9 @@ const int N = 16;                      // canales del PCA9685
 const int N_SERVOS = 12;
 const uint8_t PCA_ADDR = 0x40;
 const uint32_t PCA_OSC_HZ = 27000000;  // el oscilador de los PCA genéricos varía (25-27 MHz)
+const uint8_t PCA_LED0_ON_L = 0x06;    // registro del canal 0; cada canal ocupa 4 (ON_L ON_H OFF_L OFF_H)
+const uint16_t PCA_APAGADO = 4096;     // OFF con el bit 12: salida apagada (servo sin fuerza)
+const uint32_t I2C_HZ = 100000;        // 100 kHz, como siempre: con un solo envío por S ya alcanza
 const int PIN_SDA = 21, PIN_SCL = 22;
 const int PIN_OE = 25;                 // OE del PCA9685: LOW = salidas encendidas
 const int PIN_LED = 2;
@@ -104,6 +130,9 @@ const unsigned long AUX_VIEJO_MS = 100;   // sin datos de la auxiliar por más d
 Adafruit_PWMServoDriver pca(PCA_ADDR);
 bool pcaOk = false;
 int ultimoUs[N] = {0};                 // último pulso aplicado a cada canal (0 = suelto)
+uint8_t pcaPrescale = 0;               // el PRESCALE del PCA9685, leído una vez en setup()
+uint16_t offQuiero[N];                 // el OFF que debe tener cada canal (ticks, o PCA_APAGADO)
+bool offAlDia[N];                      // true = el PCA9685 ya lo tiene (la escritura salió bien)
 
 char linea[128];                       // comando de la compu (S y K llevan hasta 12 números)
 int largo = 0;
@@ -117,12 +146,85 @@ unsigned long auxDescartadas = 0;
 char auxBuf[160];
 int auxLargo = 0;
 
+// Diagnóstico (van en '?'; ver el encabezado). Los "peor" se reinician en cada '?'.
+unsigned long diagNs = 0;              // S entendidos desde que arrancó
+unsigned long diagI2cErr = 0;          // escrituras de I²C que fallaron desde que arrancó
+uint8_t diagI2cCod = 0;                // código de Wire de la última falla
+unsigned long diagI2cPeorUs = 0;
+unsigned long diagSPeorUs = 0;
+unsigned long diagLineaPeorUs = 0;
+unsigned long diagVueltaPeorUs = 0;
+
+void diagPeor(unsigned long &peor, unsigned long us) { if (us > peor) peor = us; }
+
 // ------------------------------------------------------------------ servos
+
+// Ticks del PCA9685 para un pulso en µs. Es la cuenta de writeMicroseconds() de Adafruit, paso por
+// paso (así los pulsos son idénticos a los de las pruebas 01-07), pero con el PRESCALE guardado:
+// sin leerlo por I²C cada vez.
+uint16_t ticksDe(int us) {
+  double pulselength = 1000000;
+  uint16_t prescale = pcaPrescale;
+  prescale += 1;
+  pulselength *= prescale;
+  pulselength /= PCA_OSC_HZ;
+  double pulse = us;
+  pulse /= pulselength;
+  return (uint16_t)pulse;
+}
+
+// Los canales a..b en UNA transacción de I²C: el PCA9685 avanza solo de registro en registro
+// (auto-incremento, lo prende setPWMFreq) y aplica los cambios juntos al terminar. Se hace con Wire
+// directo (no con setPWM de Adafruit) para saber si salió bien en cualquier versión de la librería.
+void escribirRango(int a, int b) {
+  Wire.beginTransmission(PCA_ADDR);
+  Wire.write((uint8_t)(PCA_LED0_ON_L + 4 * a));
+  for (int i = a; i <= b; i++) {
+    uint16_t off = offQuiero[i];
+    Wire.write((uint8_t)0);                                 // ON = 0
+    Wire.write((uint8_t)0);
+    Wire.write((uint8_t)(off & 0xFF));
+    Wire.write((uint8_t)(off >> 8));
+  }
+  unsigned long t0 = micros();
+  uint8_t cod = Wire.endTransmission();
+  diagPeor(diagI2cPeorUs, micros() - t0);
+  bool ok = cod == 0;
+  if (!ok) { diagI2cErr++; diagI2cCod = cod; }
+  for (int i = a; i <= b; i++) offAlDia[i] = ok;            // si falló, se reintenta la próxima vez
+}
+
+// Escribe todos los servos que el PCA9685 todavía no tiene (S y T), del primero al último
+// pendiente; los de en medio que ya estaban se reescriben igual (no cambian).
+void escribirPendientes() {
+  int a = -1, b = -1;
+  for (int i = 0; i < N_SERVOS; i++)
+    if (!offAlDia[i]) { if (a < 0) a = i; b = i; }
+  if (a >= 0) escribirRango(a, b);                          // si nada cambió, no se toca el I²C
+}
+
+// Un canal, una transacción (P, G y soltarTodos).
+void ponerOff(int ch, uint16_t off) {
+  offQuiero[ch] = off;
+  escribirRango(ch, ch);
+}
+
+void ponerUs(int ch, int us) {
+  ponerOff(ch, ticksDe(us));
+  ultimoUs[ch] = us;
+}
+
+// Lo que pide un canal en S o T (us > 0: pulso; 0: soltar). Solo lo marca; escribe escribirPendientes().
+void pedirCanal(int ch, int us) {
+  uint16_t off = us == 0 ? PCA_APAGADO : ticksDe(us);
+  if (off != offQuiero[ch]) { offQuiero[ch] = off; offAlDia[ch] = false; }
+  ultimoUs[ch] = us;
+}
 
 void soltarTodos() {
   if (!pcaOk) return;
   for (int i = 0; i < N; i++) {
-    pca.setPWM(i, 0, 4096);                                // salida apagada: servo sin fuerza
+    ponerOff(i, PCA_APAGADO);                              // salida apagada: servo sin fuerza
     ultimoUs[i] = 0;
   }
 }
@@ -293,8 +395,11 @@ const char *razonReinicio() {
 
 void mandarEstado() {
   auxPoll();
-  Serial.printf("OK1-RETRO listo PCA=%s FB=%d AUX=%s DESC=%lu PROTO=3 RESET=%s SEG=%lu\n", pcaOk ? "ok" : "NO",
+  Serial.printf("OK1-RETRO listo PCA=%s FB=%d AUX=%s DESC=%lu PROTO=3 RESET=%s SEG=%lu", pcaOk ? "ok" : "NO",
                 canalesConRetro(), auxOk() ? "ok" : "NO", auxDescartadas, razonReinicio(), millis() / 1000);
+  Serial.printf(" DIAG=1 NS=%lu SMAX=%lu LINMAX=%lu VUELTAMAX=%lu I2CERR=%lu I2CCOD=%u I2CMAX=%lu\n", diagNs,
+                diagSPeorUs, diagLineaPeorUs, diagVueltaPeorUs, diagI2cErr, (unsigned)diagI2cCod, diagI2cPeorUs);
+  diagSPeorUs = diagLineaPeorUs = diagVueltaPeorUs = diagI2cPeorUs = 0;
 }
 
 // ------------------------------------------------------------------ rampas (G, protocolo v2)
@@ -394,8 +499,7 @@ void rampa(char *p) {
     if (t >= sigCmd) {
       long us = lround(rampaPulso(t, a, b, dur, espera, (int)vueltas));
       us = constrain(us, (long)US_MIN, (long)US_MAX_CH[ch]);  // el límite duro manda siempre
-      pca.writeMicroseconds(ch, (int)us);
-      ultimoUs[ch] = (int)us;
+      ponerUs(ch, (int)us);
       if (nC < RAMPA_MAX_CMD) rampaC[nC++] = {(uint32_t)t, (int16_t)us};
       sigCmd += RAMPA_DT_CMD_US;
       if (!local && !auxOk()) { detenida = true; razon = "la auxiliar dejo de mandar datos"; break; }
@@ -419,8 +523,7 @@ void rampa(char *p) {
     Serial.printf("E G: detenida (%s); el canal %d se queda en %d us\n", razon, ch, ultimoUs[ch]);
     return;
   }
-  pca.writeMicroseconds(ch, (int)a);                         // termina exacto en a
-  ultimoUs[ch] = (int)a;
+  ponerUs(ch, (int)a);                                       // termina exacto en a
 
   Serial.printf("G DATOS %d %d %d\n", ch, nM, nC);
   for (int i = 0; i < nM; i++) {
@@ -453,14 +556,15 @@ void ponerTodos(char *p) {
     }
     p = fin;
   }
+  diagNs++;                                                 // la línea llegó bien
   if (!pcaOk) { Serial.println("E S: sin PCA9685"); return; }
   for (int i = 0; i < N_SERVOS; i++) {
     if (v[i] == -1) continue;
-    if (v[i] == 0) { pca.setPWM(i, 0, 4096); ultimoUs[i] = 0; continue; }
+    if (v[i] == 0) { pedirCanal(i, 0); continue; }
     long us = constrain(v[i], (long)US_MIN, (long)US_MAX_CH[i]);   // el límite duro manda siempre
-    pca.writeMicroseconds(i, (int)us);
-    ultimoUs[i] = (int)us;
+    pedirCanal(i, (int)us);
   }
+  escribirPendientes();                                     // una sola transacción de I²C (o ninguna)
   lecturas("S");
 }
 
@@ -558,10 +662,8 @@ void trayCorrer(char *p) {
     if (Serial.available()) { detenida = true; razon = "llego un comando por USB"; break; }
     if (k < trayN && t >= (unsigned long)k * TRAY_DT_US) {
       int16_t *fila = trayUs + (size_t)k * N_SERVOS;
-      for (int j = 0; j < trayNch; j++) {
-        pca.writeMicroseconds(trayCh[j], fila[j]);
-        ultimoUs[trayCh[j]] = fila[j];
-      }
+      for (int j = 0; j < trayNch; j++) pedirCanal(trayCh[j], fila[j]);
+      escribirPendientes();                                 // todos los canales del punto, juntos
       trayTc[k++] = (uint32_t)t;
       if (usaAux && !auxOk()) { detenida = true; razon = "la auxiliar dejo de mandar datos"; break; }
     }
@@ -627,7 +729,7 @@ void atender(char *s) {
     long us = strtol(p, &fin, 10);
     if (fin == p) { Serial.println("E P: falta us"); return; }
     us = constrain(us, (long)US_MIN, (long)US_MAX_CH[ch]);
-    if (pcaOk) pca.writeMicroseconds((int)ch, (int)us);
+    if (pcaOk) ponerUs((int)ch, (int)us);
     ultimoUs[ch] = (int)us;
     Serial.printf("OK P %ld %ld\n", ch, us);              // pulso que sí se aplicó
   } else if (c == 'R') {
@@ -670,12 +772,15 @@ void setup() {
   pinMode(PIN_OE, OUTPUT);
   digitalWrite(PIN_OE, HIGH);                              // salidas apagadas mientras arranca
   Wire.begin(PIN_SDA, PIN_SCL);
+  Wire.setClock(I2C_HZ);
+  for (int i = 0; i < N; i++) { offQuiero[i] = PCA_APAGADO; offAlDia[i] = false; }
   Wire.beginTransmission(PCA_ADDR);
   pcaOk = (Wire.endTransmission() == 0);
   if (pcaOk) {
     pca.begin();
     pca.setOscillatorFrequency(PCA_OSC_HZ);
     pca.setPWMFreq(50);
+    pcaPrescale = pca.readPrescale();                      // una sola vez (ver ticksDe)
     soltarTodos();
   }
   digitalWrite(PIN_OE, LOW);                               // salidas encendidas (canales sueltos)
@@ -687,19 +792,33 @@ void setup() {
   mandarEstado();
 }
 
+unsigned long tVuelta = 0;             // micros() al empezar la vuelta anterior de loop()
+unsigned long enComandosAntes = 0;     // lo que esa vuelta pasó atendiendo comandos (G y T tardan segundos)
+unsigned long tPrimerCaracter = 0;     // micros() del primer carácter de la línea que se está juntando
+
 void loop() {
+  unsigned long t = micros(), enComandos = 0;
+  if (tVuelta) diagPeor(diagVueltaPeorUs, t - tVuelta - enComandosAntes);   // la vuelta, sin los comandos
+  tVuelta = t;
   auxPoll();
   while (Serial.available()) {
     char c = (char)Serial.read();
     if (c == '\r') continue;
     if (c == '\n') {
       linea[largo] = 0;
+      unsigned long t0 = micros();
+      if (largo > 0) diagPeor(diagLineaPeorUs, t0 - tPrimerCaracter);
       atender(linea);
+      unsigned long dt = micros() - t0;
+      enComandos += dt;
+      if (linea[0] == 'S') diagPeor(diagSPeorUs, dt);
       largo = 0;
     } else if (largo < (int)sizeof(linea) - 1) {
+      if (largo == 0) tPrimerCaracter = micros();
       linea[largo++] = c;
     }
   }
+  enComandosAntes = enComandos;
   // LED: fijo si la auxiliar manda datos, parpadeando si no
   digitalWrite(PIN_LED, auxOk() ? HIGH : ((millis() / 250) % 2 ? HIGH : LOW));
 }

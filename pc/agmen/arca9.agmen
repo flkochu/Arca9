@@ -1,7 +1,7 @@
 # arca9.agmen — los mensajes del puente entre Arca9 y Agmen (pc/agmen/).
 #
 #   Revisar sin correr nada:  agmen gen arca9.agmen
-#   Python:                   msgs = agmen.load("arca9.agmen")   (puente.py, poses.py y manejo.py)
+#   Python:                   msgs = agmen.load("arca9.agmen")   (puente.py y poses.py)
 #
 # Ángulos: grados REALES del eje de cada servo (pc/escala.py: tabla de la prueba 01 y factor de la
 # prueba 02), no los de la convención de 11.11 µs por grado.
@@ -60,9 +60,14 @@ message Arca9Estado {
     bool[12] bloqueado            # pedido pero sin mover: sin límites medidos o sin lectura creíble
 }
 
-# Lo que manda la sección "Manejar" del panel de Agmen ([web.teleop]). Es el tipo del panel:
-# no le cambies los campos, o el panel y manejo.py ya no se entienden.
-message MotorCommand {
-    f32 left
-    f32 right
+# Lo que mandan los botones de la tarjeta "Poses" del panel ([[web.command]] en robot.toml, Agmen
+# 0.13) a poses.py, por /arca9/pose. poses.py va a esa pose con suavidad y se queda ahí.
+# (La línea en blanco de abajo va a propósito: ver el punto 11 de PENDIENTES_AGMEN.md.)
+
+const u8 PARADO = 0
+const u8 SENTADO = 1
+const u8 ECHADO = 2
+
+message Arca9Pose {
+    u8 pose                       # PARADO, SENTADO o ECHADO
 }

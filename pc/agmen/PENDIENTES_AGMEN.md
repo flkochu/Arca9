@@ -4,18 +4,25 @@ Lo que le faltó o le sobró a Agmen 0.10.1 al hacer `pc/agmen/` (nota 06 de la 
 se cambió nada de Agmen: donde hizo falta, se rodeó desde este lado, y abajo dice cómo. Cada punto
 dice cómo verlo.
 
+**Al 9 de noviembre (Agmen 0.13.0):** Agmen resolvió los puntos 1, 2, 4 y 7 (0.12.1 y 0.13.0, RFC
+0012) y Arca9 ya los usa: `manejo.py` se borró, los botones "Poses" del panel son un
+`[[web.command]]` y `poses.py` escucha `/mux/mando`. El 6 lo propone el RFC 0011 (perfiles), que
+está por decidirse. El 11 es nuevo.
+
 | # | Qué | Tipo | Cómo se rodeó aquí |
 |---|---|---|---|
-| 1 | El panel solo manda `MotorCommand` | Falta | `manejo.py` traduce las flechas a `Arca9Comando` |
-| 2 | Nadie sabe quién tiene el mando del mux | Falta | `poses.py` escucha la entrada del panel |
+| 1 | El panel solo manda `MotorCommand` | **Resuelto en 0.13.0** | Botones "Poses" (`[[web.command]]` → `Arca9Pose`); `manejo.py` ya no existe |
+| 2 | Nadie sabe quién tiene el mando del mux | **Resuelto en 0.13.0** | `poses.py` escucha `/mux/mando` (`MuxEstado`) |
 | 3 | Los enums se ven como números | Falta | Ninguno: `modo: 3` hay que leerlo en `arca9.agmen` |
-| 4 | Un `f32` NaN rompe el JSON de Foxglove | Error | Ninguno: con el panel de Agmen no pasa |
+| 4 | Un `f32` NaN rompe el JSON de Foxglove | **Resuelto en 0.12.1** | — (sale `null`) |
 | 5 | Un arreglo de 12 sale en una sola gráfica, y el estado mezcla escalas | Falta | Ninguno: `modo` y `errores` se leen en el inspector |
 | 6 | `robot.toml` no tiene variables | Falta | Dos archivos: `robot.toml` y `robot_simulado.toml` |
-| 7 | Dos `agmen run` en la misma máquina | Error | La prueba revisa que no haya otro hub antes de empezar |
+| 7 | Dos `agmen run` en la misma máquina | **Avisa desde 0.12.1** (arranca igual) | La prueba sigue revisando que no haya otro hub antes de empezar |
 | 8 | Un nodo de hardware no puede pedir reloj real | Falta | `robot.toml` no usa `[clock]` |
 | 9 | El ejemplo `arca9.agmen` de Agmen ya no es el de Arca9 | Sobra | — |
 | 10 | Sin hub, cada publicador repite el mismo aviso | Detalle | — |
+| 11 | Un comentario de varias líneas antes de un `const` rompe el código generado | Error | Una línea en blanco entre el comentario y el `const` |
+| 12 | La tarjeta Manejar sale aunque el robot no la use | Detalle | Ninguno: se ignora |
 
 ## 1. El panel solo sabe manejar un robot de ruedas
 
@@ -141,3 +148,39 @@ repositorio.
 
 `python puente.py --simulado` sin `agmen run` imprime "no hay un agmen hub en esta máquina…" tres
 veces al mismo tiempo, una por cada publicador y suscriptor. Con uno por nodo bastaría.
+
+## 11. Un comentario de varias líneas antes de un `const` rompe el código generado
+
+*Visto con Agmen 0.13.0, al agregar `PARADO`, `SENTADO` y `ECHADO` a `arca9.agmen`.*
+
+Si un `const` lleva justo arriba un comentario de dos o más líneas, `agmen.load()` truena con un
+`SyntaxError`: el generador de Python pone el comentario al lado del `const` con un solo `#`, y la
+segunda línea queda como código (`gen.py`, `f"{c.name} = ... # {c.doc}"`). El de C++ hace lo mismo
+con `///<`. Para verlo:
+
+```
+package t
+# uno
+# dos (con paréntesis)
+const u8 A = 0
+```
+
+```
+>>> agmen.load("t.agmen")
+SyntaxError: invalid syntax      (la línea "dos (con paréntesis)")
+```
+
+`agmen gen t.agmen` (el resumen) no lo detecta: sale bien. **Lo que serviría:** que el comentario
+de un `const` vaya en varias líneas de comentario, o que se junte en una. **Aquí:** en
+`arca9.agmen` hay una línea en blanco entre el comentario y los `const`, así el comentario no se
+pega a ellos.
+
+## 12. La tarjeta Manejar sale aunque el robot no la use
+
+*Visto con Agmen 0.13.0 en Windows, con `robot_simulado.toml` (9 de noviembre).*
+
+Arca9 ya no tiene `[web.teleop]`: maneja con su tarjeta **Poses** (`[[web.command]]`). Aun así, el
+panel muestra la tarjeta **Manejar**, vacía, con el texto "Para manejar el robot desde aquí agrega a
+tu robot.toml: `[web.teleop]` target = "/cmd/teleop"". Confunde: parece que falta algo. **Lo que
+serviría:** no mostrarla si el `robot.toml` no tiene `[web.teleop]` (o al menos si ya tiene algún
+`[[web.command]]`), o dejarla cerrada.

@@ -107,6 +107,25 @@ USB a 115200 baud, una línea por comando. Sirven "New Line" y "Both NL & CR".
 Cada versión solo agrega comandos, así que los scripts viejos siguen funcionando. Un script que
 necesita un comando nuevo revisa primero el número de `PROTO` en `?`.
 
+**Diagnóstico en `?` (9 nov 2026, `DIAG=1`).** Al final de la respuesta de `?` van campos nuevos;
+`PROTO` sigue en 3 porque ningún comando cambia, y `DIAG` dice la versión de estos campos. Todos
+los scripts buscan sus campos por nombre, así que los ignoran. Los `MAX` son lo peor desde el `?`
+anterior (se reinician al contestar), en µs:
+
+```
+OK1-RETRO listo PCA=ok FB=12 AUX=ok DESC=0 PROTO=3 RESET=encendido SEG=12 DIAG=1 NS=5321 SMAX=5410 LINMAX=5620 VUELTAMAX=310 I2CERR=0 I2CCOD=0 I2CMAX=4520
+```
+
+| Campo | Qué es |
+|---|---|
+| `NS` | `S` que entendió desde que arrancó (uno dañado no cuenta). El puente los compara con los que mandó |
+| `SMAX` | El `S` más lento: de tener la línea completa a terminar de contestar (I²C + lecturas) |
+| `LINMAX` | La línea más lenta en llegar completa, del primer carácter al fin de línea (~5.4 ms un `S` a 115200) |
+| `VUELTAMAX` | La vuelta de `loop()` más larga sin contar los comandos (`G` y `T` tardan segundos a propósito) |
+| `I2CERR` | Escrituras de I²C al PCA9685 que fallaron desde que arrancó |
+| `I2CCOD` | Código de `Wire.endTransmission()` de la última falla: 2 o 3 = el PCA9685 no contestó, 4 = otra falla, 5 = se acabó el tiempo; 0 = ninguna |
+| `I2CMAX` | La escritura de I²C más lenta (12 canales = 50 bytes a 100 kHz ≈ 4.5 ms) |
+
 | Comando | Respuesta |
 |---|---|
 | `P canal us` | `OK P canal us`, con el pulso que sí se aplicó |
@@ -154,6 +173,13 @@ igual que `V`. Es para un control en tiempo real desde la compu (por ejemplo, el
 Agmen): una línea de ida y una de vuelta, ~11 ms a 115200 baud. **No hace rampas:** quien lo use
 tiene que mandar cambios chicos.
 
+**Desde el 9 de noviembre (firmware, el protocolo no cambia):** los pulsos que cambiaron se
+escriben al PCA9685 en una sola transacción de I²C, y los que no cambiaron no se vuelven a
+escribir. Antes cada pulso usaba `writeMicroseconds()` de Adafruit, que en cada llamada lee el
+PRESCALE por I²C: con los 12 servos moviéndose, un `S` tardaba 42 ms en vez de 11 (nota 07). Los
+ticks se calculan con la misma cuenta de Adafruit, así que los pulsos son idénticos a los de antes
+(el arnés lo revisa de 500 a 2360 µs).
+
 ### `T`: trayectoria de varios servos (v3)
 
 1. `T INICIO mascara n`: prepara n puntos (uno cada 20 ms, hasta 1500 = 30 s) para los canales de
@@ -197,3 +223,5 @@ c = (v0 + … + v8) % 1000, y contesta `R k n` con `R k n media sigma min max`.
 | Arduino: `No space left on device` o `Failed to extract python313.dll` | Disco C: lleno; borra `%LOCALAPPDATA%\Temp\arduino` |
 | `no se pudo abrir COM6` | El Monitor Serie de Arduino sigue abierto |
 | `la trayectoria no terminó a tiempo` y luego `no contestó a 'V'` (3 nov, prueba 05) | La ESP32 se reinició o Windows perdió el USB a media corrida. Con `?`: si `SEG` es chico, se reinició, y `RESET` dice por qué |
+| El puente baja a ~24 Hz cuando el perro se mueve y `S tarda 42 ms` (9 nov, nota 07) | `writeMicroseconds()` de Adafruit leía el PRESCALE por I²C en cada pulso. Arreglado en el firmware del 9 nov: carga `esp32_principal` otra vez |
+| El puente a ~35 Hz con `peor 100–270 ms` y errores que suben (9 nov, nota 07) | Mira las líneas `compu:` y `ESP32:` que el puente imprime cada 10 s (firmware con `DIAG=1`): dicen de qué lado se perdió el tiempo |

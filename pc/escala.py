@@ -47,7 +47,14 @@ def buscar_en_datos(nombre):
 
 
 def relativa(ruta):
-    return os.path.relpath(ruta, RAIZ).replace("\\", "/") if ruta else None
+    """La ruta desde la raíz del repo (para los mensajes). Si está en otro disco (Windows: el repo en
+    E: y un archivo temporal en C:), no hay ruta relativa: se regresa completa."""
+    if not ruta:
+        return None
+    try:
+        return os.path.relpath(ruta, RAIZ).replace("\\", "/")
+    except ValueError:
+        return os.path.abspath(ruta).replace("\\", "/")
 
 
 class Escala:

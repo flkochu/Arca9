@@ -17,10 +17,15 @@ Interpolación: de articulación a articulación, con un perfil de jerk mínimo 
 velocidad ni aceleración). La duración sale de la articulación que más se mueve, para que ninguna
 pase de --vel °/s (por defecto 30, la mitad del --vel-max del puente: el puente no la recorta).
 
-Empieza desde donde está el perro: espera la primera lectura de /arca9/articulaciones. Si el panel
-toma el mando (llegan mensajes a --mando-mayor, la entrada del mux con más prioridad), publica lo
-mismo que el panel para que al soltar no haya salto, y medio segundo después de que el panel se
-calla vuelve a interpolar desde ahí hasta su pose.
+Empieza desde donde está el perro: espera la primera lectura de /arca9/articulaciones.
+
+Los botones "parado / sentado / echado" del panel (la tarjeta "Poses", [[web.command]] en
+robot.toml, Agmen 0.13) mandan un Arca9Pose a /arca9/pose: poses.py va a esa pose con suavidad,
+desde donde va, y se queda ahí (deja la secuencia).
+
+Si otra entrada del mux le gana (la del panel, /arca9/comando/panel), lo sabe por /mux/mando (el
+MuxEstado de Agmen 0.13): mientras tanto publica lo mismo que sale del mux, para que al regresarle
+el mando no haya salto, y retoma desde ahí hasta su pose.
 
 Uso (normalmente lo lanza `agmen run robot.toml`):
     python poses.py --pose parado
@@ -46,7 +51,7 @@ POSES = {
 HZ = 50.0
 VEL = 30.0                  # °/s pico de la articulación que más se mueve
 DUR_MIN = 1.0               # s: ninguna transición más rápida que esto
-HOLD_MANDO = 0.5            # s sin mensajes del panel para retomar (el mux suelta a los 0.3 s)
+NOMBRE_POSE = {0: "parado", 1: "sentado", 2: "echado"}          # Arca9Pose.pose (arca9.agmen)
 
 
 def comando_de_pose(perro, nombre):
@@ -85,8 +90,10 @@ def main():
     ap.add_argument("--espera", type=float, default=3.0, help="s quieto en cada pose de la secuencia (default 3)")
     ap.add_argument("--vel", type=float, default=VEL, help=f"°/s pico de cada articulación (default {VEL:g})")
     ap.add_argument("--destino", default="/arca9/comando/poses", help="a dónde publicar (la entrada del mux)")
-    ap.add_argument("--mando-mayor", default="/arca9/comando/panel",
-                    help="la entrada del mux que le gana a poses (para retomar sin salto); '' = ninguna")
+    ap.add_argument("--pedidos", default="/arca9/pose", help="de dónde llegan los Arca9Pose (botones del panel)")
+    ap.add_argument("--mux", default="/mux/mando", help="el MuxEstado del mux (quién manda); '' = no escuchar")
+    ap.add_argument("--entrada", default="poses", help="el nombre de mi entrada en el [[mux]]")
+    ap.add_argument("--salida", default="/arca9/comando", help="lo que sale del mux (para retomar sin salto)")
     ap.add_argument("--simulado", action="store_true", help="con las 4 patas simuladas (copias de la FL)")
     a = ap.parse_args()
     secuencia = a.secuencia or [a.pose or "parado"]
@@ -103,11 +110,13 @@ def main():
     if not perro.patas:
         sys.exit("[poses] ninguna pata medida (datos/*/pata_*.json): no hay nada que mover")
     objetivos = {}
-    for nombre in sorted(set(secuencia)):
+    for nombre in POSES:
         try:
             objetivos[nombre] = comando_de_pose(perro, nombre)
         except ErrorPata as e:
-            sys.exit(f"[poses] la pose '{nombre}' no cabe en los límites: {e}")
+            if nombre in secuencia:
+                sys.exit(f"[poses] la pose '{nombre}' no cabe en los límites: {e}")
+            log(f"⚠ la pose '{nombre}' no cabe en los límites, su botón no hará nada: {e}")
     log(f"patas: {', '.join(n.upper() for n in perro.patas)}"
         + (f" (simuladas: {', '.join(n.upper() for n in perro.simuladas)})" if perro.simuladas else "")
         + (f" · sin medir, no se mueven: {', '.join(n.upper() for n in perro.faltan())}" if perro.faltan() else ""))
@@ -116,18 +125,33 @@ def main():
 
     node = agmen.Node("poses")
     pub = node.publisher(msgs.Arca9Comando, a.destino)
-    st = {"medido": None, "tr": None, "i": 0, "llego": None, "mayor_q": None, "mayor_t": -1e9,
-          "cedido": False, "esperando": 0.0}
+    st = {"medido": None, "tr": None, "i": 0, "llego": None, "salida": None, "manda": "",
+          "cedido": False, "esperando": 0.0, "pedida": None}
 
     @node.on(msgs.Arca9Articulaciones, "/arca9/articulaciones")
     def articulaciones(s):
         st["medido"] = list(s.message.q)
 
-    if a.mando_mayor:
-        @node.on(msgs.Arca9Comando, a.mando_mayor)
-        def mayor(s):
-            st["mayor_q"] = (list(s.message.q), list(s.message.activo))
-            st["mayor_t"] = time.monotonic()
+    @node.on(msgs.Arca9Pose, a.pedidos)
+    def pedido(s):
+        nombre = NOMBRE_POSE.get(s.message.pose)
+        if nombre is None:
+            log(f"⚠ llegó la pose {s.message.pose}: no existe (0 = parado, 1 = sentado, 2 = echado)")
+        elif nombre not in objetivos:
+            log(f"⚠ la pose '{nombre}' no cabe en los límites: no la hago")
+        else:
+            st["pedida"] = nombre          # los botones mandan ~20 por segundo: se aplica en tick()
+
+    if a.mux:
+        from agmen.msgs import MuxEstado
+
+        @node.on(MuxEstado, a.mux)
+        def mando(s):
+            st["manda"] = s.message.entrada
+
+        @node.on(msgs.Arca9Comando, a.salida)
+        def salida(s):
+            st["salida"] = (list(s.message.q), list(s.message.activo))
 
     def empezar(desde, t):
         nombre = secuencia[st["i"]]
@@ -136,22 +160,36 @@ def main():
         st["llego"] = None
         log(f"→ {nombre} en {st['tr'].T:.1f} s")
 
+    def pedir(nombre, t):
+        """Un botón del panel: de la secuencia a quedarse en `nombre`, desde donde va."""
+        st["pedida"] = None
+        if secuencia == [nombre] and st["tr"] is not None:
+            return                          # ya va (o ya está) ahí
+        log(f"el panel pidió '{nombre}'")
+        secuencia[:] = [nombre]
+        st["i"] = 0
+        if st["tr"] is not None and not st["cedido"]:
+            empezar(st["tr"].q(t), t)
+
     @node.every(1.0 / HZ)
     def tick():
         t = time.monotonic()
-        if t - st["mayor_t"] < HOLD_MANDO and st["mayor_q"]:
-            # El panel tiene el mando: publico lo mismo que él, así al soltar no hay salto.
+        if st["pedida"]:
+            pedir(st["pedida"], t)
+        if st["manda"] not in (a.entrada, "") and st["salida"]:
+            # Otra entrada tiene el mando: publico lo que sale del mux, así al regresarme el mando
+            # no hay salto.
             if not st["cedido"]:
                 st["cedido"] = True
-                log("el panel tomó el mando: sigo donde él deje al perro")
-            q, activo = st["mayor_q"]
+                log(f"'{st['manda']}' tomó el mando: sigo donde deje al perro")
+            q, activo = st["salida"]
             pub.publish(msgs.Arca9Comando(q=q, activo=activo))
             return
-        if st["cedido"]:
+        if st["cedido"] and st["manda"] == a.entrada:
             st["cedido"] = False
-            q_panel, _ = st["mayor_q"]
-            log("el panel soltó el mando: retomo desde ahí")
-            empezar(q_panel, t)
+            q_ultimo, _ = st["salida"]
+            log("me regresaron el mando: retomo desde ahí")
+            empezar(q_ultimo, t)
         if st["tr"] is None:
             q0 = st["medido"]
             canales = perro.canales()

@@ -8,6 +8,8 @@ es el mismo que habla con el perro.
 
 Contesta lo que usa el puente, como el firmware (docs/hardware.md, protocolo v3):
     ?                 "OK1-RETRO listo PCA=ok FB=12 AUX=ok DESC=0 PROTO=3 RESET=encendido SEG=12"
+                      + el diagnóstico del firmware del 9 nov: "DIAG=1 NS=.. SMAX=.. LINMAX=.. VUELTAMAX=..
+                      I2CERR=.. I2CCOD=.. I2CMAX=.." (sin él con diag=False, como un firmware viejo)
     S us0 ... us11    "S mv0 ... mv11" (-1 = no cambiar, 0 = soltar, recorta a 500–2360 µs)
     V                 "V mv0 ... mv11"
     P canal us        "OK P canal us"
@@ -23,7 +25,10 @@ Para provocar fallas (las pruebas):
     reiniciar("voltaje_bajo")       se reinicia como con una caída de voltaje: suelta los servos,
                                     SEG vuelve a 0 y manda su línea de arranque (OK1-RETRO ...)
     reiniciar(..., aviso=False)     igual, pero la línea de arranque se pierde
-    callar(n)                       no contesta los siguientes n comandos
+    callar(n)                       no contesta los siguientes n comandos (se pierden: no cuentan en NS)
+    colgar_i2c(n, s)                la escritura de I²C de los siguientes n S tarda s segundos y falla
+                                    (código 5, como el timeout de Wire): la respuesta llega s tarde y
+                                    SMAX, I2CMAX e I2CERR lo muestran
     danar(n)                        daña las siguientes n respuestas
     tardar(n, s)                    las siguientes n respuestas llegan s segundos tarde
     proto = 2                       un firmware viejo, sin el comando S
@@ -40,7 +45,8 @@ BAUD_BYTES_S = 11520.0
 
 
 class ESP32Falsa:
-    def __init__(self, esc, retro, inicio=None, semilla=7, reloj=time.monotonic, latencia=True, aux=True):
+    def __init__(self, esc, retro, inicio=None, semilla=7, reloj=time.monotonic, latencia=True, aux=True,
+                 diag=True):
         """`inicio` = 12 grados reales donde están los servos al empezar (sueltos)."""
         self.esc, self.retro, self.reloj, self.latencia, self.aux = esc, retro, reloj, latencia, aux
         self.rng = random.Random(semilla)
@@ -59,6 +65,9 @@ class ESP32Falsa:
         self.s_tardar = 0.0
         self.cerrado = False
         self.reinicio_en = None
+        self.diag = diag
+        self.n_colgar, self.s_colgar = 0, 0.0
+        self._diag_cero()
         self._mandar(self._estado())             # su mensaje de arranque (el puente lo tira al conectar)
 
     # ---------------------------------------------------------------- como un serial.Serial
@@ -111,6 +120,7 @@ class ESP32Falsa:
         self.hist = [[] for _ in range(12)]
         self.t_arranque = self.reloj()
         self.razon = razon
+        self._diag_cero()
         self.entrada = b""
         self.salida = []                         # lo que iba en camino se pierde
         if aviso:
@@ -125,17 +135,30 @@ class ESP32Falsa:
     def tardar(self, n=1, s=0.3):
         self.n_tardar, self.s_tardar = n, s
 
+    def colgar_i2c(self, n=1, s=0.05):
+        self.n_colgar, self.s_colgar = n, s
+
     # ---------------------------------------------------------------- por dentro
     def seg(self):
         return int(self.reloj() - self.t_arranque)
 
-    def _estado(self):
-        return (f"OK1-RETRO listo PCA=ok FB={12 if self.aux else 3} AUX={'ok' if self.aux else 'NO'} DESC=0 "
-                f"PROTO={self.proto} RESET={self.razon} SEG={self.seg()} (ESP32 FALSA)")
+    def _diag_cero(self):
+        self.ns = self.i2c_err = self.i2c_cod = 0
+        self.smax = self.i2cmax = 0
 
-    def _mandar(self, texto, n_entrada=0):
+    def _estado(self):
+        l = (f"OK1-RETRO listo PCA=ok FB={12 if self.aux else 3} AUX={'ok' if self.aux else 'NO'} DESC=0 "
+             f"PROTO={self.proto} RESET={self.razon} SEG={self.seg()}")
+        if self.diag:
+            l += (f" DIAG=1 NS={self.ns} SMAX={self.smax} LINMAX={5400 if self.smax else 0} VUELTAMAX=300 "
+                  f"I2CERR={self.i2c_err} I2CCOD={self.i2c_cod} I2CMAX={self.i2cmax}")
+            self.smax = self.i2cmax = 0
+        return l + " (ESP32 FALSA)"
+
+    def _mandar(self, texto, n_entrada=0, extra=0.0):
         datos = (texto + "\n").encode()
         espera = (n_entrada + len(datos)) / BAUD_BYTES_S + 0.0005 if self.latencia else 0.0
+        espera += extra
         if self.n_tardar:
             self.n_tardar -= 1
             espera += self.s_tardar
@@ -166,13 +189,23 @@ class ESP32Falsa:
             except ValueError:
                 self._mandar("E S: son 12 pulsos (us0 ... us11; -1 = no cambiar, 0 = soltar)", n_entrada)
                 return
+            self.ns += 1
+            i2c_us, extra = (4500 if any(u != -1 for u in v) else 0), 0.0
+            if self.n_colgar:
+                self.n_colgar -= 1
+                extra = self.s_colgar
+                i2c_us = int(extra * 1e6)
+                self.i2c_err += 1
+                self.i2c_cod = 5
+            self.i2cmax = max(self.i2cmax, i2c_us)
+            self.smax = max(self.smax, i2c_us + 900)
             ahora = self.reloj()
             self._avanzar(ahora)
             for ch, u in enumerate(v):
                 if u == -1:
                     continue
                 self._aplicar(ch, 0 if u == 0 else min(max(u, US_MIN), US_MAX), ahora)
-            self._mandar("S " + " ".join(str(m) for m in self._lecturas()), n_entrada)
+            self._mandar("S " + " ".join(str(m) for m in self._lecturas()), n_entrada, extra)
         elif c == "V":
             self._avanzar(self.reloj())
             self._mandar("V " + " ".join(str(m) for m in self._lecturas()), n_entrada)

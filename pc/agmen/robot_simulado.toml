@@ -1,5 +1,6 @@
-# robot_simulado.toml — Arca9 con Agmen, SIN EL PERRO: una ESP32 falsa (esp32_falsa.py) y las 4
-# patas copiadas de la FL. Es el mismo robot.toml, con --simulado en lugar de --port.
+# robot_simulado.toml — Arca9 con Agmen 0.13, SIN EL PERRO: una ESP32 falsa (esp32_falsa.py) y
+# las 4 patas de datos/*/pata_*.json (si faltara alguna, una copia de la FL). Es el mismo
+# robot.toml, con --simulado en lugar de --port.
 #
 #   agmen run pc/agmen/robot_simulado.toml
 #
@@ -17,10 +18,9 @@ cmd = "python puente.py --simulado --vel-max 60"
 name = "poses"
 cmd = "python poses.py --simulado --secuencia parado sentado parado echado --espera 3 --vel 30"
 
-[[node]]
-name = "manejo"
-cmd = "python manejo.py --simulado"
-
+# ¿Quién manda? Una entrada de más prioridad le gana a poses.py (Agmen, capítulo 6). Hoy nadie
+# publica en /arca9/comando/panel: queda lista para los deslizadores del panel, la marcha o la
+# política de aprendizaje por refuerzo. El mux publica quién manda en /mux/mando (MuxEstado).
 [[mux]]
 name = "mando"
 output = "/arca9/comando"
@@ -40,11 +40,13 @@ priority = 1
 name = "/arca9/articulaciones"
 type = "Arca9Articulaciones"
 required = true
+max_gap_ms = 200               # 10 ciclos de 20 ms sin lecturas: el panel y agmen run avisan
 
 [[topic]]
 name = "/arca9/estado"
 type = "Arca9Estado"
 required = true
+max_gap_ms = 500               # se publica a 10 Hz
 
 [[topic]]
 name = "/arca9/comando"
@@ -59,12 +61,31 @@ name = "/arca9/comando/poses"
 type = "Arca9Comando"
 
 [[topic]]
-name = "/arca9/teleop"
-type = "MotorCommand"
+name = "/arca9/pose"
+type = "Arca9Pose"
 
+# El panel NO tiene contraseña en este modo: solo se abre en esta compu. Nunca lo expongas a internet.
 [web]
 http = "127.0.0.1:8080"
 
-[web.teleop]
-target = "/arca9/teleop"
-max_speed = 1.0
+# La tarjeta "Poses" del panel (Agmen 0.13, [[web.command]]): cada botón le dice a poses.py a qué
+# pose ir (0 = parado, 1 = sentado, 2 = echado; arca9.agmen). Mientras lo aprietas se manda ~20
+# veces por segundo; al soltarlo, poses.py se queda en esa pose. No lleva ángulos: los calcula
+# poses.py con los datos/*/pata_*.json, así que aquí no se copia ninguna calibración.
+[[web.command]]
+name = "Poses"
+target = "/arca9/pose"
+type = "Arca9Pose"
+messages = "arca9.agmen"
+
+[[web.command.button]]
+label = "parado"
+value = { pose = 0 }
+
+[[web.command.button]]
+label = "sentado"
+value = { pose = 1 }
+
+[[web.command.button]]
+label = "echado"
+value = { pose = 2 }

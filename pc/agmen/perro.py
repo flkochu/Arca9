@@ -1,12 +1,15 @@
 """
 El perro completo para los nodos de Agmen: patas, canales, límites y pies
 ==========================================================================
-Lo usan puente.py, poses.py y manejo.py. No calcula nada nuevo: junta una `Pata` de pc/pata.py
+Lo usan puente.py y poses.py. No calcula nada nuevo: junta una `Pata` de pc/pata.py
 por cada pata medida y la escala de pc/escala.py.
 
-- Las patas se leen de datos/*/pata_<fl|fr|rl|rr>.json (el más reciente de cada una). Hoy solo
-  está medida la FL (prueba 05). Una pata sin su archivo no tiene límites, así que el puente no
-  la mueve.
+- Las patas se leen de datos/*/pata_<fl|fr|rl|rr>.json (el más reciente de cada una). Desde el
+  9 de noviembre están las 4 (datos/2026-11-09_patas, nota 07). Una pata sin su archivo no tiene
+  límites, así que el puente no la mueve.
+- Cada pata trae sus "signos": hacia dónde gira cada servo (el lado derecho es espejo del
+  izquierdo y los servos de atrás miran al revés). pata.py los usa para que los ángulos de
+  articulación signifiquen lo mismo en las 4.
 - Con simulado=True, las patas que faltan se arman como copias de la FL en sus canales. Solo
   sirve para la simulación: en el perro de verdad cada pata se mide.
 - Los límites son los de pata.py: los medidos menos 5°, y la rodilla sin pasar de recta. Están
@@ -46,6 +49,11 @@ def cargar_agmen():
     if not hasattr(agmen, "Node"):
         # pc/agmen/ (esta carpeta) se puede importar como "agmen" si el de verdad no está instalado
         sys.exit("Falta Agmen (se encontró la carpeta pc/agmen/, no el paquete): pip install agmen")
+    try:
+        from agmen.msgs import MuxEstado   # noqa: F401 — Agmen 0.13: quién manda y [[web.command]]
+    except ImportError:
+        sys.exit(f"Arca9 necesita Agmen 0.13 o más nuevo (tienes {getattr(agmen, '__version__', '?')}): "
+                 "pip install -U agmen")
     agmen.ensure_utf8_output()
     return agmen, agmen.load(MENSAJES)
 
@@ -60,13 +68,16 @@ class ErrorPerro(ValueError):
 
 
 class Perro:
-    def __init__(self, simulado=False, rutas=None):
-        """`rutas` = {"fl": ruta, ...} para usar otros archivos (las pruebas); si no, los de datos/."""
+    def __init__(self, simulado=False, rutas=None, patas=None):
+        """`rutas` = {"fl": ruta, ...} para usar otros archivos (las pruebas); si no, los de datos/.
+        `patas` = las que se cargan (ej. ("fl",)); si no, las 4."""
         self.patas = {}
         self.simuladas = []
         usadas = {}
         rutas = rutas or {}
         for n in PATAS:
+            if patas is not None and n not in patas:
+                continue
             ruta = rutas.get(n) or buscar_pata(f"pata_{n}.json")
             if ruta:
                 p = Pata(ruta)
@@ -102,11 +113,14 @@ class Perro:
             if not lo < hi:
                 raise ErrorPerro(f"{p.fuente}: los límites de {NOMBRE_ART[a]} quedan vacíos ({lo:.1f}° a {hi:.1f}°)")
         q_abd, q_cad, q_rod = p.de_pie_q
+        # La pose de pie revisa los signos: rodilla doblada hacia atrás (q_rod > 0) y el muslo hacia
+        # atrás (q_cad < 0). Si sale al revés, el "signos" del .json está mal.
         if q_rod <= 0:
-            # pata.py supone que al subir el ángulo de la rodilla se estira (signo −1), como en la FL.
             raise ErrorPerro(f"{p.fuente}: con su pose de pie, la rodilla sale doblada al revés (q_rod = "
-                             f"{q_rod:.1f}°). pata.py supone el mismo sentido que la FL en las 3 articulaciones; "
-                             f"si esta pata gira al revés, primero hay que enseñárselo a pata.py")
+                             f"{q_rod:.1f}°). Revisa signos.rod en el .json (¿al subir el ángulo se dobla o se estira?)")
+        if q_cad >= 0:
+            raise ErrorPerro(f"{p.fuente}: con su pose de pie, el muslo sale hacia adelante (q_cad = "
+                             f"{q_cad:+.1f}°). Revisa signos.cad en el .json (¿al subir el ángulo va adelante o atrás?)")
 
     # ---- qué hay
     def canales(self):

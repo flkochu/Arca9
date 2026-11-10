@@ -2,7 +2,7 @@
 """
 La pata de Arca9: ángulos de articulación, cinemática y límites
 ================================================================
-Lee las medidas de una pata (datos/<fecha>_pata_fl/pata_fl.json) y convierte entre:
+Lee las medidas de una pata (datos/<fecha>_.../pata_fl.json, pata_fr.json, ...) y convierte entre:
 
     grados del servo  <->  ángulo de la articulación  <->  posición del pie
 
@@ -17,6 +17,15 @@ Posición del pie, en cm, desde el eje de la cadera, en el plano de la pata:
   pie     = rodilla + (L2·sin(q_cad + q_rod), L2·cos(q_cad + q_rod))
 Con la abducción en 0 la pata se mueve en un plano vertical, a `hombro` cm del eje de la
 abducción; la cinemática de ese plano es exacta.
+
+Los ángulos de articulación significan lo mismo en las 4 patas. Lo que cambia es hacia dónde gira
+cada servo: el lado derecho es espejo del izquierdo y los servos de atrás miran al revés que los de
+adelante. Por eso cada pata dice su "signos" en su .json:
+
+    grado del servo = cero + signo · q            (cero = la pata recta)
+
+Por ejemplo, en la FL los tres son −1: al subir el servo, la pata se mete, va hacia atrás y la
+rodilla se estira. Un .json sin "signos" (el de la FL del 3 de noviembre) usa −1 en las tres.
 
 Límites: los medidos menos 5° de margen, y la rodilla sin pasar de recta (no se dobla al revés).
 
@@ -54,11 +63,15 @@ class ErrorPata(ValueError):
 class Pata:
     def __init__(self, ruta=None):
         ruta = ruta or buscar_pata()
+        self.fuente = ruta
         if ruta is None:
             raise FileNotFoundError("no encontré datos/*/pata_fl.json")
         with open(ruta, encoding="utf-8") as f:
             d = json.load(f)
-        self.fuente = os.path.relpath(ruta, RAIZ).replace("\\", "/")
+        try:
+            self.fuente = os.path.relpath(ruta, RAIZ).replace("\\", "/")
+        except ValueError:                 # Windows: en otro disco (ej. un temporal en C: y el repo en E:)
+            self.fuente = os.path.abspath(ruta).replace("\\", "/")
         self.nombre = d.get("pata", "FL")
         self.canales = [d["canales"][a] for a in ART]
         m = d["medidas_cm"]
@@ -68,13 +81,23 @@ class Pata:
         # Cero de cada articulación = la pata recta. En abducción se promedian las dos poses
         # (las dos tienen la pata vertical vista de frente).
         self.cero = {"abd": (recta["abd"] + de_pie["abd"]) / 2, "cad": recta["cad"], "rod": recta["rod"]}
-        # Sentido: grado del servo = cero + signo · q. Al subir el servo: abd se mete (q_abd baja),
-        # cad va hacia atrás (q_cad baja), rod se estira (q_rod baja). Los tres dan −1.
-        self.signo = {"abd": -1.0, "cad": -1.0, "rod": -1.0}
+        # Sentido: grado del servo = cero + signo · q. En la FL, al subir el servo: abd se mete
+        # (q_abd baja), cad va hacia atrás (q_cad baja), rod se estira (q_rod baja): los tres −1.
+        signos = d.get("signos", {"abd": -1, "cad": -1, "rod": -1})
+        self.signo = {}
+        for a in ART:
+            s = signos.get(a)
+            if s not in (1, -1):
+                raise ErrorPata(f"{self.fuente}: signos.{a} debe ser 1 o -1 (es {s!r})")
+            self.signo[a] = float(s)
         lim = d["limites_grados"]
-        self.lim = {a: [float(lim[a][0]) + MARGEN, float(lim[a][1]) - MARGEN] for a in ART}
-        # la rodilla no pasa de recta: q_rod >= MARGEN_RECTA
-        self.lim["rod"][1] = min(self.lim["rod"][1], self.cero["rod"] - MARGEN_RECTA)
+        self.lim_medidos = {a: (float(min(lim[a])), float(max(lim[a]))) for a in ART}   # como en el json
+        self.lim = {a: [float(min(lim[a])) + MARGEN, float(max(lim[a])) - MARGEN] for a in ART}
+        # la rodilla no pasa de recta: q_rod >= MARGEN_RECTA (del lado del servo que la estira)
+        if self.signo["rod"] < 0:
+            self.lim["rod"][1] = min(self.lim["rod"][1], self.cero["rod"] - MARGEN_RECTA)
+        else:
+            self.lim["rod"][0] = max(self.lim["rod"][0], self.cero["rod"] + MARGEN_RECTA)
         self.de_pie_servo = [de_pie[a] for a in ART]
         self.de_pie_q = self.q(self.de_pie_servo)
 
@@ -121,12 +144,19 @@ def main():
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
-    p = Pata()
+    for nombre in ("pata_fl.json", "pata_fr.json", "pata_rl.json", "pata_rr.json"):
+        ruta = buscar_pata(nombre)
+        if ruta:
+            mostrar(Pata(ruta))
+            print()
+
+
+def mostrar(p):
     print(f"Pata {p.nombre}: {p.fuente}")
     print(f"  muslo {p.L1:g} cm · espinilla {p.L2:g} cm · hombro {p.hombro:g} cm · canales {p.canales}")
-    print("\n  articulación   cero (servo)   límites del script (servo)")
+    print("\n  articulación   cero (servo)   signo   límites del script (servo)")
     for a in ART:
-        print(f"  {a:<12}   {p.cero[a]:8.2f}°      {p.lim[a][0]:6.1f}° a {p.lim[a][1]:6.1f}°")
+        print(f"  {a:<12}   {p.cero[a]:8.2f}°      {p.signo[a]:+.0f}     {p.lim[a][0]:6.1f}° a {p.lim[a][1]:6.1f}°")
     qa, qc, qr = p.de_pie_q
     x, z = p.fk(qc, qr)
     print(f"\n  Pose de pie: q_abd {qa:+.1f}°, q_cad {qc:+.1f}°, q_rod {qr:+.1f}°")

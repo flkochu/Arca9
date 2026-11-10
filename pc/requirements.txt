@@ -1,4 +1,4 @@
 numpy
 matplotlib
 pyserial
-agmen>=0.10.1
+agmen>=0.13

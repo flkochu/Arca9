@@ -1,36 +1,35 @@
-# robot.toml — Arca9 con Agmen, CON EL PERRO (la ESP32 principal por USB).
+# robot.toml — Arca9 con Agmen 0.13, CON EL PERRO (la ESP32 principal por USB).
 #
 #   agmen run pc/agmen/robot.toml
 #
 # Sin el perro: robot_simulado.toml (es este mismo, con --simulado en lugar de --port).
 # Las rutas son relativas a este archivo; "python" es el mismo Python que corre agmen (necesita
-# pyserial: pip install -r pc/requirements.txt). Docs: docs/bitacora/06_puente_agmen.md.
+# pyserial: pip install -r pc/requirements.txt). Docs: docs/bitacora/06_puente_agmen.md y 07.
 #
-#   poses.py ──► /arca9/comando/poses ─┐ prioridad 1
-#                                      ├─► mux "mando" ──► /arca9/comando ──► puente.py ──S──► ESP32
-#   panel ──► /arca9/teleop ──► manejo.py ──► /arca9/comando/panel ─┘ prioridad 10
-#                                                                       puente.py ──► /arca9/articulaciones
-#                                                                                 └─► /arca9/estado
+#   panel, botones "Poses" ──► /arca9/pose ──► poses.py ──► /arca9/comando/poses ─┐ prioridad 1
+#                                                                                 ├─► mux "mando"
+#   (libre: deslizadores, marcha, política) ──► /arca9/comando/panel ─────────────┘ prioridad 10
+#
+#   mux "mando" ──► /arca9/comando ──► puente.py ──S──► ESP32
+#                                      puente.py ──► /arca9/articulaciones, /arca9/estado
 
 [robot]
 name = "Arca9"
 
 [[node]]
 name = "puente"
-# Cambia COM6 por tu puerto (Linux: /dev/ttyUSB0). Primera prueba: --vel-max 20 y el perro colgado.
+# Cambia COM6 por tu puerto (Linux: /dev/ttyUSB0). Primera prueba: --vel-max 20 y el perro en el soporte.
 cmd = "python puente.py --port COM6 --vel-max 20"
 # restart = "never" (el default): si el puente se cae, que lo vuelva a prender una persona (▶).
 
 [[node]]
 name = "poses"
-cmd = "python poses.py --secuencia parado sentado parado echado --espera 3 --vel 15"
+cmd = "python poses.py --pose parado --vel 15"
 autostart = false              # no se mueve nada hasta que lo prendas (▶) desde el panel
 
-[[node]]
-name = "manejo"                # traduce las flechas del panel a Arca9Comando
-cmd = "python manejo.py"
-
-# ¿Quién manda? El panel le gana a poses.py; al soltar las flechas, en 0.3 s regresa el mando.
+# ¿Quién manda? Una entrada de más prioridad le gana a poses.py (Agmen, capítulo 6). Hoy nadie
+# publica en /arca9/comando/panel: queda lista para los deslizadores del panel, la marcha o la
+# política de aprendizaje por refuerzo. El mux publica quién manda en /mux/mando (MuxEstado).
 [[mux]]
 name = "mando"
 output = "/arca9/comando"
@@ -50,11 +49,13 @@ priority = 1
 name = "/arca9/articulaciones"
 type = "Arca9Articulaciones"
 required = true
+max_gap_ms = 200               # 10 ciclos de 20 ms sin lecturas: el panel y agmen run avisan
 
 [[topic]]
 name = "/arca9/estado"
 type = "Arca9Estado"
 required = true
+max_gap_ms = 500               # se publica a 10 Hz
 
 [[topic]]
 name = "/arca9/comando"
@@ -69,12 +70,31 @@ name = "/arca9/comando/poses"
 type = "Arca9Comando"
 
 [[topic]]
-name = "/arca9/teleop"
-type = "MotorCommand"
+name = "/arca9/pose"
+type = "Arca9Pose"
 
+# El panel NO tiene contraseña en este modo: solo se abre en esta compu. Nunca lo expongas a internet.
 [web]
 http = "127.0.0.1:8080"
 
-[web.teleop]
-target = "/arca9/teleop"       # las flechas del panel van a manejo.py
-max_speed = 1.0
+# La tarjeta "Poses" del panel (Agmen 0.13, [[web.command]]): cada botón le dice a poses.py a qué
+# pose ir (0 = parado, 1 = sentado, 2 = echado; arca9.agmen). Mientras lo aprietas se manda ~20
+# veces por segundo; al soltarlo, poses.py se queda en esa pose. No lleva ángulos: los calcula
+# poses.py con los datos/*/pata_*.json, así que aquí no se copia ninguna calibración.
+[[web.command]]
+name = "Poses"
+target = "/arca9/pose"
+type = "Arca9Pose"
+messages = "arca9.agmen"
+
+[[web.command.button]]
+label = "parado"
+value = { pose = 0 }
+
+[[web.command.button]]
+label = "sentado"
+value = { pose = 1 }
+
+[[web.command.button]]
+label = "echado"
+value = { pose = 2 }
